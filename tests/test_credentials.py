@@ -9,6 +9,8 @@ from openai_auth.config import credential_path
 from openai_auth.credentials import (
     Credential,
     delete_credentials,
+    is_expired,
+    is_near_expiry,
     load_credentials,
     redact_secrets,
     save_credentials,
@@ -88,3 +90,29 @@ def test_redact_secrets_removes_token_values_from_error_strings() -> None:
     assert "access-secret" not in redacted
     assert "refresh-secret" not in redacted
     assert redacted == "request failed with [REDACTED] and [REDACTED]"
+
+
+def test_expiry_helpers_detect_expired_and_near_expiry_credentials() -> None:
+    expired = Credential(
+        provider="openai-codex",
+        access_token="access-token",
+        refresh_token="refresh-token",
+        expires_at=1_700_000_000_000,
+    )
+    near_expiry = Credential(
+        provider="openai-codex",
+        access_token="access-token",
+        refresh_token="refresh-token",
+        expires_at=1_700_000_299_999,
+    )
+    valid = Credential(
+        provider="openai-codex",
+        access_token="access-token",
+        refresh_token="refresh-token",
+        expires_at=1_700_000_300_001,
+    )
+
+    assert is_expired(expired, now_ms=1_700_000_000_000)
+    assert not is_expired(valid, now_ms=1_700_000_000_000)
+    assert is_near_expiry(near_expiry, now_ms=1_700_000_000_000)
+    assert not is_near_expiry(valid, now_ms=1_700_000_000_000)

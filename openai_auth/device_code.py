@@ -12,6 +12,7 @@ from openai_auth.errors import (
     DeviceCodeNetworkError,
     DeviceCodeResponseError,
     DeviceCodeTimeoutError,
+    RefreshTokenError,
 )
 
 PROVIDER = "openai-codex"
@@ -116,6 +117,24 @@ def _exchange_authorization_code(
     )
 
 
+def refresh_credential(
+    client: httpx.Client,
+    credential: Credential,
+    *,
+    now_ms: Callable[[], int] | None = None,
+    request_timeout: float = DEFAULT_REQUEST_TIMEOUT_SECONDS,
+) -> Credential:
+    current_time_ms = now_ms or _system_now_ms
+    payload = {"refresh_token": credential.refresh_token, "grant_type": "refresh_token"}
+    try:
+        token_data = _post_json(client, TOKEN_URL, payload, request_timeout)
+        refreshed = _credential_from_refresh_response(token_data, credential, current_time_ms())
+    except (DeviceCodeNetworkError, DeviceCodeResponseError) as exc:
+        raise RefreshTokenError("refresh failed") from exc
+
+    return refreshed
+
+
 def _post_json(
     client: httpx.Client, url: str, payload: dict[str, str], request_timeout: float
 ) -> dict[str, Any]:
@@ -192,19 +211,55 @@ def _credential_from_token_response(data: dict[str, Any], now_ms: int) -> Creden
         raise DeviceCodeResponseError("token response is invalid")
     if not isinstance(expires_in, int) or expires_in <= 0:
         raise DeviceCodeResponseError("token response is invalid")
-    if account_id is not None and not isinstance(account_id, str):
+    return Credential(
+        provider=PROVIDER,
+        access_token=access_token,
+        refresh_token=refresh_token,
+        expires_at=now_ms + expires_in * 1000,
+        account_id=_optional_string(account_id),
+        email=_optional_string(email),
+    )
+
+
+def _credential_from_refresh_response(
+    data: dict[str, Any], current: Credential, now_ms: int
+) -> Credential:
+    access_token = data.get("access_token")
+    refresh_token = data.get("refresh_token", current.refresh_token)
+    expires_in = data.get("expires_in")
+    account_id = _metadata_value(data.get("account_id"), current.account_id)
+    email = _metadata_value(data.get("email"), current.email)
+
+    if not isinstance(access_token, str) or not access_token:
         raise DeviceCodeResponseError("token response is invalid")
-    if email is not None and not isinstance(email, str):
+    if not isinstance(refresh_token, str) or not refresh_token:
+        raise DeviceCodeResponseError("token response is invalid")
+    if not isinstance(expires_in, int) or expires_in <= 0:
         raise DeviceCodeResponseError("token response is invalid")
 
     return Credential(
-        provider=PROVIDER,
+        provider=current.provider,
         access_token=access_token,
         refresh_token=refresh_token,
         expires_at=now_ms + expires_in * 1000,
         account_id=account_id,
         email=email,
     )
+
+
+def _metadata_value(value: Any, fallback: str | None) -> str | None:
+    extracted = _optional_string(value)
+    if extracted is None:
+        return fallback
+
+    return extracted
+
+
+def _optional_string(value: Any) -> str | None:
+    if isinstance(value, str) and value:
+        return value
+
+    return None
 
 
 def _max_poll_attempts(deadline_ms: int, start_ms: int, interval_seconds: int) -> int:

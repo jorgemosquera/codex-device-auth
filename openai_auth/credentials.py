@@ -6,6 +6,8 @@ from typing import Any
 
 from openai_auth.config import credential_path
 
+NEAR_EXPIRY_WINDOW_MS = 300_000
+
 
 @dataclass(frozen=True)
 class Credential:
@@ -40,6 +42,22 @@ def delete_credentials(path: Path | None = None) -> None:
     target_path = path or credential_path()
     if target_path.exists():
         target_path.unlink()
+
+
+def is_expired(credential: Credential, *, now_ms: int) -> bool:
+    return credential.expires_at <= now_ms
+
+
+def is_near_expiry(
+    credential: Credential,
+    *,
+    now_ms: int,
+    window_ms: int = NEAR_EXPIRY_WINDOW_MS,
+) -> bool:
+    if window_ms <= 0:
+        raise ValueError("window_ms must be positive")
+
+    return credential.expires_at <= now_ms + window_ms
 
 
 def credential_from_mapping(data: Any) -> Credential:

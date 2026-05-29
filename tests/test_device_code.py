@@ -4,10 +4,11 @@ import httpx
 import pytest
 
 from openai_auth.credentials import Credential
-from openai_auth.device_code import login_with_device_code
+from openai_auth.device_code import login_with_device_code, refresh_credential
 from openai_auth.errors import (
     DeviceCodeDeniedError,
     DeviceCodeResponseError,
+    RefreshTokenError,
     DeviceCodeTimeoutError,
 )
 
@@ -201,3 +202,135 @@ def test_login_with_device_code_raises_sanitized_error_for_malformed_token_respo
     message = str(exc_info.value)
     assert "token response is invalid" in message
     assert "leaked-access" not in message
+
+
+def test_refresh_credential_replaces_access_token_and_expiry() -> None:
+    credential = Credential(
+        provider="openai-codex",
+        access_token="old-access",
+        refresh_token="refresh-token",
+        expires_at=1_700_000_000_000,
+        account_id="account-123",
+        email="person@example.com",
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/oauth/token"
+        return httpx.Response(
+            200,
+            json={
+                "access_token": "new-access",
+                "refresh_token": "new-refresh",
+                "expires_in": 1800,
+            },
+        )
+
+    refreshed = refresh_credential(
+        make_client(handler),
+        credential,
+        now_ms=lambda: 1_700_000_000_000,
+        request_timeout=2,
+    )
+
+    assert refreshed == Credential(
+        provider="openai-codex",
+        access_token="new-access",
+        refresh_token="new-refresh",
+        expires_at=1_700_001_800_000,
+        account_id="account-123",
+        email="person@example.com",
+    )
+
+
+def test_refresh_credential_preserves_refresh_token_and_updates_valid_metadata() -> None:
+    credential = Credential(
+        provider="openai-codex",
+        access_token="old-access",
+        refresh_token="old-refresh",
+        expires_at=1_700_000_000_000,
+        account_id="old-account",
+        email="old@example.com",
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "access_token": "new-access",
+                "expires_in": 1800,
+                "account_id": "new-account",
+                "email": "new@example.com",
+            },
+        )
+
+    refreshed = refresh_credential(
+        make_client(handler),
+        credential,
+        now_ms=lambda: 1_700_000_000_000,
+        request_timeout=2,
+    )
+
+    assert refreshed == Credential(
+        provider="openai-codex",
+        access_token="new-access",
+        refresh_token="old-refresh",
+        expires_at=1_700_001_800_000,
+        account_id="new-account",
+        email="new@example.com",
+    )
+
+
+def test_refresh_credential_ignores_malformed_metadata() -> None:
+    credential = Credential(
+        provider="openai-codex",
+        access_token="old-access",
+        refresh_token="old-refresh",
+        expires_at=1_700_000_000_000,
+        account_id="old-account",
+        email="old@example.com",
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "access_token": "new-access",
+                "expires_in": 1800,
+                "account_id": 123,
+                "email": ["new@example.com"],
+            },
+        )
+
+    refreshed = refresh_credential(
+        make_client(handler),
+        credential,
+        now_ms=lambda: 1_700_000_000_000,
+        request_timeout=2,
+    )
+
+    assert refreshed.account_id == "old-account"
+    assert refreshed.email == "old@example.com"
+
+
+def test_refresh_credential_failure_is_sanitized() -> None:
+    credential = Credential(
+        provider="openai-codex",
+        access_token="old-access",
+        refresh_token="refresh-secret",
+        expires_at=1_700_000_000_000,
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"error": "invalid refresh-secret"})
+
+    with pytest.raises(RefreshTokenError) as exc_info:
+        refresh_credential(
+            make_client(handler),
+            credential,
+            now_ms=lambda: 1_700_000_000_000,
+            request_timeout=2,
+        )
+
+    message = str(exc_info.value)
+    assert "refresh failed" in message
+    assert "refresh-secret" not in message

@@ -24,3 +24,7 @@ class DeviceCodeResponseError(DeviceCodeError):
 
 class DeviceCodeTimeoutError(DeviceCodeError):
     """Raised when polling reaches its bounded timeout."""
+
+
+class RefreshTokenError(AuthError):
+    """Raised when a refresh-token exchange fails."""
