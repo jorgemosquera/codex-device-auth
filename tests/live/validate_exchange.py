@@ -1,5 +1,3 @@
-import base64
-import json
 import os
 import re
 import sys
@@ -12,24 +10,13 @@ from openai_auth.config import (
     PROVIDER_ORIGINATOR,
     PROVIDER_USER_AGENT,
 )
+from openai_auth.credentials import decode_jwt_payload
 
 TOKEN_URL = "https://auth.openai.com/oauth/token"
 
 
 def _redact(text: str) -> str:
     return re.sub(r"\b(?:access|refresh)-[A-Za-z0-9._-]+\b", "[REDACTED]", text)
-
-
-def _decode_jwt_middle(token: str) -> dict | None:
-    parts = token.split(".")
-    if len(parts) != 3:
-        return None
-    try:
-        decoded = base64.urlsafe_b64decode(parts[1] + "==").decode("utf-8")
-        parsed = json.loads(decoded)
-        return parsed if isinstance(parsed, dict) else None
-    except Exception:
-        return None
 
 
 def main() -> int:
@@ -85,14 +72,14 @@ def main() -> int:
 
             access_token = data.get("access_token", "")
             if access_token:
-                payload_claims = _decode_jwt_middle(access_token)
+                claims = decode_jwt_payload(access_token)
                 print("\n=== JWT CLAIMS (middle segment) ===")
-                if payload_claims:
-                    auth_claims = payload_claims.get("https://api.openai.com/auth", {})
-                    profile_claims = payload_claims.get("https://api.openai.com/profile", {})
+                if claims:
+                    auth_claims = claims.get("https://api.openai.com/auth", {})
+                    profile_claims = claims.get("https://api.openai.com/profile", {})
                     print(f"  https://api.openai.com/auth:    {auth_claims}")
                     print(f"  https://api.openai.com/profile: {profile_claims}")
-                    print(f"  exp: {payload_claims.get('exp')}")
+                    print(f"  exp: {claims.get('exp')}")
                 else:
                     print("  (could not decode JWT payload)")
         except ValueError:
