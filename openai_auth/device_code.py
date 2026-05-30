@@ -6,7 +6,7 @@ from typing import Any
 
 import httpx
 
-from openai_auth.credentials import Credential
+from openai_auth.credentials import SUPPORTED_PROVIDER, Credential
 from openai_auth.errors import (
     DeviceCodeDeniedError,
     DeviceCodeNetworkError,
@@ -15,7 +15,7 @@ from openai_auth.errors import (
     RefreshTokenError,
 )
 
-PROVIDER = "openai-codex"
+PROVIDER = SUPPORTED_PROVIDER
 AUTH_BASE_URL = "https://auth.openai.com"
 DEVICE_CODE_URL = f"{AUTH_BASE_URL}/oauth/device/code"
 DEVICE_POLL_URL = f"{AUTH_BASE_URL}/oauth/device/poll"
@@ -169,7 +169,7 @@ def _device_code_challenge_from_response(data: dict[str, Any]) -> DeviceCodeChal
         raise DeviceCodeResponseError("device code response is invalid")
     if not isinstance(verification_uri, str) or not verification_uri:
         raise DeviceCodeResponseError("device code response is invalid")
-    if not isinstance(interval, int) or interval <= 0:
+    if isinstance(interval, bool) or not isinstance(interval, int) or interval <= 0:
         raise DeviceCodeResponseError("device code response is invalid")
 
     return DeviceCodeChallenge(
@@ -209,7 +209,7 @@ def _credential_from_token_response(data: dict[str, Any], now_ms: int) -> Creden
         raise DeviceCodeResponseError("token response is invalid")
     if not isinstance(refresh_token, str) or not refresh_token:
         raise DeviceCodeResponseError("token response is invalid")
-    if not isinstance(expires_in, int) or expires_in <= 0:
+    if isinstance(expires_in, bool) or not isinstance(expires_in, int) or expires_in <= 0:
         raise DeviceCodeResponseError("token response is invalid")
     return Credential(
         provider=PROVIDER,
@@ -234,7 +234,7 @@ def _credential_from_refresh_response(
         raise DeviceCodeResponseError("token response is invalid")
     if not isinstance(refresh_token, str) or not refresh_token:
         raise DeviceCodeResponseError("token response is invalid")
-    if not isinstance(expires_in, int) or expires_in <= 0:
+    if isinstance(expires_in, bool) or not isinstance(expires_in, int) or expires_in <= 0:
         raise DeviceCodeResponseError("token response is invalid")
 
     return Credential(

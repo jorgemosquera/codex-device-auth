@@ -16,6 +16,7 @@ from openai_auth.device_code import DEFAULT_REQUEST_TIMEOUT_SECONDS, refresh_cre
 from openai_auth.errors import CredentialError, RefreshTokenError, RuntimeRequestError
 
 RUNTIME_TEST_URL = "https://chatgpt.com/backend-api/accounts/check"
+MAX_RESPONSE_DETAIL_LENGTH = 200
 
 
 @dataclass(frozen=True)
@@ -102,7 +103,11 @@ def _ensure_fresh_credential(
     except RefreshTokenError:
         raise RuntimeRequestError("refresh failed before runtime request") from None
 
-    save_credentials(refreshed, path)
+    try:
+        save_credentials(refreshed, path)
+    except CredentialError:
+        raise RuntimeRequestError("credential file could not be saved") from None
+
     return refreshed
 
 
@@ -127,6 +132,32 @@ def _response_detail(response: httpx.Response) -> str:
     try:
         data = response.json()
     except ValueError:
-        return response.text
+        return "request rejected"
 
-    return str(data)
+    if isinstance(data, dict):
+        detail = _safe_error_detail(data)
+        if detail is not None:
+            return detail
+
+    return "request rejected"
+
+
+def _safe_error_detail(data: dict[object, object]) -> str | None:
+    error = data.get("error")
+    if isinstance(error, str) and error:
+        return _truncate(error)
+    if not isinstance(error, dict):
+        return None
+
+    message = error.get("message")
+    if isinstance(message, str) and message:
+        return _truncate(message)
+
+    return None
+
+
+def _truncate(value: str) -> str:
+    if len(value) <= MAX_RESPONSE_DETAIL_LENGTH:
+        return value
+
+    return f"{value[:MAX_RESPONSE_DETAIL_LENGTH]}..."

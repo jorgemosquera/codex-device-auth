@@ -5,7 +5,7 @@ import httpx
 import pytest
 
 from openai_auth.credentials import Credential, save_credentials
-from openai_auth.errors import RuntimeRequestError
+from openai_auth.errors import CredentialError, RuntimeRequestError
 from openai_auth.cli import main
 from openai_auth.runtime import RuntimeTestResult, auth_status, build_auth_headers, run_test_request
 
@@ -206,8 +206,101 @@ def test_run_test_request_rejection_is_sanitized(tmp_path: Path) -> None:
     assert_secret_absent(message, credential)
 
 
+def test_run_test_request_rejection_uses_concise_safe_error_detail(tmp_path: Path) -> None:
+    path = tmp_path / "credentials.json"
+    credential = Credential(
+        provider="openai-codex",
+        access_token="access-secret",
+        refresh_token="refresh-secret",
+        expires_at=1_700_000_300_001,
+    )
+    save_credentials(credential, path)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            json={
+                "error": {
+                    "message": "denied",
+                    "sensitive": "unrelated-secret",
+                }
+            },
+        )
+
+    with pytest.raises(RuntimeRequestError) as exc_info:
+        run_test_request(
+            httpx.Client(transport=httpx.MockTransport(handler)),
+            path=path,
+            now_ms=lambda: 1_700_000_000_000,
+            request_timeout=2,
+        )
+
+    message = str(exc_info.value)
+    assert "denied" in message
+    assert "unrelated-secret" not in message
+
+
+def test_run_test_request_rejection_uses_generic_non_json_detail(tmp_path: Path) -> None:
+    path = tmp_path / "credentials.json"
+    credential = Credential(
+        provider="openai-codex",
+        access_token="access-secret",
+        refresh_token="refresh-secret",
+        expires_at=1_700_000_300_001,
+    )
+    save_credentials(credential, path)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="upstream access-secret unrelated-secret")
+
+    with pytest.raises(RuntimeRequestError) as exc_info:
+        run_test_request(
+            httpx.Client(transport=httpx.MockTransport(handler)),
+            path=path,
+            now_ms=lambda: 1_700_000_000_000,
+            request_timeout=2,
+        )
+
+    message = str(exc_info.value)
+    assert "runtime request rejected with HTTP 500: request rejected" in message
+    assert "unrelated-secret" not in message
+
+
+def test_run_test_request_refresh_save_failure_is_sanitized(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = tmp_path / "credentials.json"
+    credential = Credential(
+        provider="openai-codex",
+        access_token="old-access",
+        refresh_token="old-refresh",
+        expires_at=1_700_000_000_000,
+    )
+    save_credentials(credential, path)
+
+    def fake_save(*_args: object, **_kwargs: object) -> None:
+        raise CredentialError("old-access old-refresh")
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"access_token": "new-access", "expires_in": 1800})
+
+    monkeypatch.setattr("openai_auth.runtime.save_credentials", fake_save)
+
+    with pytest.raises(RuntimeRequestError) as exc_info:
+        run_test_request(
+            httpx.Client(transport=httpx.MockTransport(handler)),
+            path=path,
+            now_ms=lambda: 1_700_000_000_000,
+            request_timeout=2,
+        )
+
+    message = str(exc_info.value)
+    assert "credential file could not be saved" in message
+    assert_secret_absent(message, credential)
+
+
 def test_module_entrypoint_dispatches_test_command(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     def fake_run_test_request(
         _client: httpx.Client,
@@ -220,7 +313,7 @@ def test_module_entrypoint_dispatches_test_command(
 
     monkeypatch.setattr("openai_auth.cli.run_test_request", fake_run_test_request)
 
-    exit_code = main(["test"])
+    exit_code = main(["test", "--credential-path", str(tmp_path / "credentials.json")])
 
     captured = capsys.readouterr()
     assert exit_code == 0

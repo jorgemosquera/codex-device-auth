@@ -10,13 +10,15 @@ import httpx
 from openai_auth.credentials import (
     Credential,
     delete_credentials,
+    is_expired,
+    is_near_expiry,
     load_credentials,
     redact_secrets,
     save_credentials,
 )
 from openai_auth.device_code import login_with_device_code, refresh_credential
 from openai_auth.errors import AuthError, CredentialError
-from openai_auth.runtime import auth_status, run_test_request
+from openai_auth.runtime import run_test_request
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -69,23 +71,33 @@ def _login_command(path: Path | None) -> int:
 
 
 def _status_command(path: Path | None) -> int:
-    status = auth_status(path, now_ms=_now_ms())
-    if status.state == "not_logged_in":
+    try:
+        credential = load_credentials(path)
+    except CredentialError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if credential is None:
         print("not logged in")
         return 0
 
-    parts = [status.state]
-    if status.account_id is not None:
-        parts.append(f"account={status.account_id}")
-    if status.email is not None:
-        parts.append(f"email={status.email}")
+    parts = [_status_state(credential)]
+    if credential.account_id is not None:
+        parts.append(f"account={credential.account_id}")
+    if credential.email is not None:
+        parts.append(f"email={credential.email}")
 
-    print(" ".join(parts))
+    print(redact_secrets(" ".join(parts), credential))
     return 0
 
 
 def _refresh_command(path: Path | None) -> int:
-    credential = load_credentials(path)
+    try:
+        credential = load_credentials(path)
+    except CredentialError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
     if credential is None:
         print("not logged in", file=sys.stderr)
         return 1
@@ -103,7 +115,12 @@ def _refresh_command(path: Path | None) -> int:
 
 
 def _test_command(path: Path | None) -> int:
-    credential = load_credentials(path)
+    try:
+        credential = load_credentials(path)
+    except CredentialError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
     with httpx.Client() as client:
         try:
             result = run_test_request(client, path=path, now_ms=_now_ms)
@@ -119,7 +136,12 @@ def _test_command(path: Path | None) -> int:
 
 
 def _logout_command(path: Path | None) -> int:
-    delete_credentials(path)
+    try:
+        delete_credentials(path)
+    except CredentialError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
     print("logged out")
     return 0
 
@@ -127,6 +149,16 @@ def _logout_command(path: Path | None) -> int:
 def _redacted_error(exc: AuthError, credential: Credential | None = None) -> str:
     message = redact_secrets(str(exc), credential)
     return re.sub(r"\b(?:access|refresh)-[A-Za-z0-9._-]+\b", "[REDACTED]", message)
+
+
+def _status_state(credential: Credential) -> str:
+    now_ms = _now_ms()
+    if is_expired(credential, now_ms=now_ms):
+        return "expired"
+    if is_near_expiry(credential, now_ms=now_ms):
+        return "near_expiry"
+
+    return "valid"
 
 
 def _now_ms() -> int:

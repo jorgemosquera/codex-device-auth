@@ -204,6 +204,40 @@ def test_login_with_device_code_raises_sanitized_error_for_malformed_token_respo
     assert "leaked-access" not in message
 
 
+def test_login_with_device_code_rejects_boolean_expiry() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/device/code"):
+            return httpx.Response(
+                200,
+                json={
+                    "device_code": "device-123",
+                    "user_code": "ABCD-EFGH",
+                    "verification_uri": "https://example.test/verify",
+                    "interval": 5,
+                },
+            )
+        if request.url.path.endswith("/device/poll"):
+            return httpx.Response(200, json={"status": "authorized", "authorization_code": "auth-123"})
+        return httpx.Response(
+            200,
+            json={
+                "access_token": "access-token",
+                "refresh_token": "refresh-token",
+                "expires_in": True,
+            },
+        )
+
+    with pytest.raises(DeviceCodeResponseError, match="token response is invalid"):
+        login_with_device_code(
+            make_client(handler),
+            output=lambda _message: None,
+            now_ms=lambda: 1_700_000_000_000,
+            sleep=lambda _seconds: None,
+            max_poll_seconds=30,
+            request_timeout=2,
+        )
+
+
 def test_refresh_credential_replaces_access_token_and_expiry() -> None:
     credential = Credential(
         provider="openai-codex",

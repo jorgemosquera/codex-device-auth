@@ -1,10 +1,14 @@
 import json
 import os
+import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 from openai_auth.config import credential_path
+from openai_auth.errors import CredentialError
+
+SUPPORTED_PROVIDER = "openai-codex"
 
 NEAR_EXPIRY_WINDOW_MS = 300_000
 
@@ -21,12 +25,36 @@ class Credential:
 
 def save_credentials(credential: Credential, path: Path | None = None) -> None:
     target_path = path or credential_path()
-    target_path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(asdict(credential), indent=2, sort_keys=True)
-    target_path.write_text(f"{payload}\n", encoding="utf-8")
 
     if os.name == "posix":
-        target_path.chmod(0o600)
+        temp_path: Path | None = None
+        try:
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            fd, raw_temp_path = tempfile.mkstemp(
+                prefix=f".{target_path.name}.",
+                suffix=".tmp",
+                dir=target_path.parent,
+                text=True,
+            )
+            temp_path = Path(raw_temp_path)
+            with os.fdopen(fd, "w", encoding="utf-8") as file:
+                file.write(f"{payload}\n")
+            temp_path.chmod(0o600)
+            temp_path.replace(target_path)
+        except OSError:
+            cleanup_failed = _delete_temp_file(temp_path)
+            message = "credential file could not be saved"
+            if cleanup_failed:
+                message = "credential file could not be saved; temporary file could not be deleted"
+            raise CredentialError(message) from None
+        return
+
+    try:
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_text(f"{payload}\n", encoding="utf-8")
+    except OSError:
+        raise CredentialError("credential file could not be saved") from None
 
 
 def load_credentials(path: Path | None = None) -> Credential | None:
@@ -34,14 +62,33 @@ def load_credentials(path: Path | None = None) -> Credential | None:
     if not source_path.exists():
         return None
 
-    data = json.loads(source_path.read_text(encoding="utf-8"))
-    return credential_from_mapping(data)
+    try:
+        data = json.loads(source_path.read_text(encoding="utf-8"))
+        return credential_from_mapping(data)
+    except (OSError, ValueError):
+        raise CredentialError("credential file is invalid") from None
 
 
 def delete_credentials(path: Path | None = None) -> None:
     target_path = path or credential_path()
-    if target_path.exists():
-        target_path.unlink()
+    try:
+        if target_path.exists():
+            target_path.unlink()
+    except OSError:
+        raise CredentialError("credential file could not be deleted") from None
+
+
+def _delete_temp_file(temp_path: Path | None) -> bool:
+    if temp_path is None:
+        return False
+
+    try:
+        if temp_path.exists():
+            temp_path.unlink()
+    except OSError:
+        return True
+
+    return False
 
 
 def is_expired(credential: Credential, *, now_ms: int) -> bool:
@@ -71,13 +118,13 @@ def credential_from_mapping(data: Any) -> Credential:
     account_id = data.get("account_id")
     email = data.get("email")
 
-    if not isinstance(provider, str) or not provider:
+    if not isinstance(provider, str) or provider != SUPPORTED_PROVIDER:
         raise ValueError("credential file is invalid")
     if not isinstance(access_token, str) or not access_token:
         raise ValueError("credential file is invalid")
     if not isinstance(refresh_token, str) or not refresh_token:
         raise ValueError("credential file is invalid")
-    if not isinstance(expires_at, int) or expires_at <= 0:
+    if isinstance(expires_at, bool) or not isinstance(expires_at, int) or expires_at <= 0:
         raise ValueError("credential file is invalid")
     if account_id is not None and not isinstance(account_id, str):
         raise ValueError("credential file is invalid")
@@ -99,8 +146,13 @@ def redact_secrets(message: str, credential: Credential | None = None) -> str:
     if credential is None:
         return redacted
 
-    for token in (credential.access_token, credential.refresh_token):
-        if token:
-            redacted = redacted.replace(token, "[REDACTED]")
+    secrets = sorted(
+        {credential.access_token, credential.refresh_token},
+        key=len,
+        reverse=True,
+    )
+    for secret in secrets:
+        if secret:
+            redacted = redacted.replace(secret, "[REDACTED]")
 
     return redacted
