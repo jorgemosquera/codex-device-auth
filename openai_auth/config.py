@@ -6,6 +6,11 @@ DEFAULT_CREDENTIAL_DIR = ".openai_auth"
 DEFAULT_CREDENTIAL_FILE = "credentials.json"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
+CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
+PROVIDER_ORIGINATOR = "openclaw"
+PROVIDER_USER_AGENT = "openclaw"
+DEVICE_CALLBACK_URL = "https://auth.openai.com/deviceauth/callback"
+
 
 def credential_path() -> Path:
     configured_path = os.environ.get(CREDENTIAL_PATH_ENV)

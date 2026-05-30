@@ -1,16 +1,32 @@
+import base64
+import json as _json
+import urllib.parse
 from collections.abc import Callable
 
 import httpx
 import pytest
 
+from openai_auth.config import CODEX_CLIENT_ID, DEVICE_CALLBACK_URL
 from openai_auth.credentials import Credential
 from openai_auth.device_code import login_with_device_code, refresh_credential
 from openai_auth.errors import (
-    DeviceCodeDeniedError,
+    DeviceCodeNetworkError,
     DeviceCodeResponseError,
-    RefreshTokenError,
     DeviceCodeTimeoutError,
+    RefreshTokenError,
 )
+
+
+def make_jwt(account_id: str | None = None, email: str | None = None, exp: int | None = None) -> str:
+    payload: dict = {}
+    if account_id is not None:
+        payload["https://api.openai.com/auth"] = {"chatgpt_account_id": account_id}
+    if email is not None:
+        payload["https://api.openai.com/profile"] = {"email": email}
+    if exp is not None:
+        payload["exp"] = exp
+    encoded = base64.urlsafe_b64encode(_json.dumps(payload).encode()).rstrip(b"=").decode()
+    return f"header.{encoded}.sig"
 
 
 def make_client(handler: Callable[[httpx.Request], httpx.Response]) -> httpx.Client:
@@ -26,24 +42,30 @@ def test_login_with_device_code_returns_credentials_after_token_exchange() -> No
             return httpx.Response(
                 200,
                 json={
-                    "device_code": "device-123",
+                    "device_auth_id": "device-123",
                     "user_code": "ABCD-EFGH",
-                    "verification_uri": "https://example.test/verify",
                     "interval": 5,
                 },
             )
         if len(requests) == 2:
-            return httpx.Response(200, json={"status": "authorization_pending"})
+            return httpx.Response(403)
         if len(requests) == 3:
-            return httpx.Response(200, json={"status": "authorized", "authorization_code": "auth-123"})
+            return httpx.Response(
+                200,
+                json={"authorization_code": "auth-123", "code_verifier": "verifier-abc"},
+            )
+        body = urllib.parse.parse_qs(request.content.decode())
+        assert body["grant_type"] == ["authorization_code"]
+        assert body["code"] == ["auth-123"]
+        assert body["code_verifier"] == ["verifier-abc"]
+        assert body["client_id"] == [CODEX_CLIENT_ID]
+        assert body["redirect_uri"] == [DEVICE_CALLBACK_URL]
         return httpx.Response(
             200,
             json={
-                "access_token": "access-123",
+                "access_token": make_jwt(account_id="account-123", email="person@example.com"),
                 "refresh_token": "refresh-123",
                 "expires_in": 3600,
-                "account_id": "account-123",
-                "email": "person@example.com",
             },
         )
 
@@ -60,17 +82,17 @@ def test_login_with_device_code_returns_credentials_after_token_exchange() -> No
 
     assert credential == Credential(
         provider="openai-codex",
-        access_token="access-123",
+        access_token=make_jwt(account_id="account-123", email="person@example.com"),
         refresh_token="refresh-123",
         expires_at=1_700_003_600_000,
         account_id="account-123",
         email="person@example.com",
     )
-    assert messages == ["Visit https://example.test/verify and enter code ABCD-EFGH"]
+    assert messages == ["Visit https://auth.openai.com/codex/device and enter code ABCD-EFGH"]
     assert [request.url.path for request in requests] == [
-        "/oauth/device/code",
-        "/oauth/device/poll",
-        "/oauth/device/poll",
+        "/api/accounts/deviceauth/usercode",
+        "/api/accounts/deviceauth/token",
+        "/api/accounts/deviceauth/token",
         "/oauth/token",
     ]
 
@@ -86,13 +108,12 @@ def test_login_with_device_code_times_out_after_bounded_polling() -> None:
             return httpx.Response(
                 200,
                 json={
-                    "device_code": "device-123",
+                    "device_auth_id": "device-123",
                     "user_code": "ABCD-EFGH",
-                    "verification_uri": "https://example.test/verify",
                     "interval": 5,
                 },
             )
-        return httpx.Response(200, json={"status": "authorization_pending"})
+        return httpx.Response(403)
 
     def now_ms() -> int:
         return current_ms
@@ -115,7 +136,7 @@ def test_login_with_device_code_times_out_after_bounded_polling() -> None:
     assert request_count == 3
 
 
-def test_login_with_device_code_raises_for_denied_authorization() -> None:
+def test_login_with_device_code_raises_for_unexpected_poll_status() -> None:
     request_count = 0
 
     def handler(_request: httpx.Request) -> httpx.Response:
@@ -125,44 +146,14 @@ def test_login_with_device_code_raises_for_denied_authorization() -> None:
             return httpx.Response(
                 200,
                 json={
-                    "device_code": "device-123",
+                    "device_auth_id": "device-123",
                     "user_code": "ABCD-EFGH",
-                    "verification_uri": "https://example.test/verify",
                     "interval": 5,
                 },
             )
-        return httpx.Response(200, json={"status": "denied", "error": "access_denied"})
+        return httpx.Response(400)
 
-    with pytest.raises(DeviceCodeDeniedError, match="device code authorization denied"):
-        login_with_device_code(
-            make_client(handler),
-            output=lambda _message: None,
-            now_ms=lambda: 1_700_000_000_000,
-            sleep=lambda _seconds: None,
-            max_poll_seconds=30,
-            request_timeout=2,
-        )
-
-
-def test_login_with_device_code_raises_for_failed_authorization() -> None:
-    request_count = 0
-
-    def handler(_request: httpx.Request) -> httpx.Response:
-        nonlocal request_count
-        request_count += 1
-        if request_count == 1:
-            return httpx.Response(
-                200,
-                json={
-                    "device_code": "device-123",
-                    "user_code": "ABCD-EFGH",
-                    "verification_uri": "https://example.test/verify",
-                    "interval": 5,
-                },
-            )
-        return httpx.Response(200, json={"status": "failed", "error": "expired_token"})
-
-    with pytest.raises(DeviceCodeDeniedError, match="device code authorization failed"):
+    with pytest.raises(DeviceCodeNetworkError):
         login_with_device_code(
             make_client(handler),
             output=lambda _message: None,
@@ -175,18 +166,20 @@ def test_login_with_device_code_raises_for_failed_authorization() -> None:
 
 def test_login_with_device_code_raises_sanitized_error_for_malformed_token_response() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith("/device/code"):
+        if request.url.path.endswith("/deviceauth/usercode"):
             return httpx.Response(
                 200,
                 json={
-                    "device_code": "device-123",
+                    "device_auth_id": "device-123",
                     "user_code": "ABCD-EFGH",
-                    "verification_uri": "https://example.test/verify",
                     "interval": 5,
                 },
             )
-        if request.url.path.endswith("/device/poll"):
-            return httpx.Response(200, json={"status": "authorized", "authorization_code": "auth-123"})
+        if request.url.path.endswith("/deviceauth/token"):
+            return httpx.Response(
+                200,
+                json={"authorization_code": "auth-123", "code_verifier": "verifier-abc"},
+            )
         return httpx.Response(200, json={"access_token": "leaked-access", "expires_in": 3600})
 
     with pytest.raises(DeviceCodeResponseError) as exc_info:
@@ -206,22 +199,24 @@ def test_login_with_device_code_raises_sanitized_error_for_malformed_token_respo
 
 def test_login_with_device_code_rejects_boolean_expiry() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith("/device/code"):
+        if request.url.path.endswith("/deviceauth/usercode"):
             return httpx.Response(
                 200,
                 json={
-                    "device_code": "device-123",
+                    "device_auth_id": "device-123",
                     "user_code": "ABCD-EFGH",
-                    "verification_uri": "https://example.test/verify",
                     "interval": 5,
                 },
             )
-        if request.url.path.endswith("/device/poll"):
-            return httpx.Response(200, json={"status": "authorized", "authorization_code": "auth-123"})
+        if request.url.path.endswith("/deviceauth/token"):
+            return httpx.Response(
+                200,
+                json={"authorization_code": "auth-123", "code_verifier": "verifier-abc"},
+            )
         return httpx.Response(
             200,
             json={
-                "access_token": "access-token",
+                "access_token": make_jwt(),
                 "refresh_token": "refresh-token",
                 "expires_in": True,
             },
@@ -250,10 +245,13 @@ def test_refresh_credential_replaces_access_token_and_expiry() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/oauth/token"
+        body = urllib.parse.parse_qs(request.content.decode())
+        assert body["grant_type"] == ["refresh_token"]
+        assert body["client_id"] == [CODEX_CLIENT_ID]
         return httpx.Response(
             200,
             json={
-                "access_token": "new-access",
+                "access_token": make_jwt(account_id="account-123", email="person@example.com"),
                 "refresh_token": "new-refresh",
                 "expires_in": 1800,
             },
@@ -266,14 +264,11 @@ def test_refresh_credential_replaces_access_token_and_expiry() -> None:
         request_timeout=2,
     )
 
-    assert refreshed == Credential(
-        provider="openai-codex",
-        access_token="new-access",
-        refresh_token="new-refresh",
-        expires_at=1_700_001_800_000,
-        account_id="account-123",
-        email="person@example.com",
-    )
+    assert refreshed.access_token == make_jwt(account_id="account-123", email="person@example.com")
+    assert refreshed.refresh_token == "new-refresh"
+    assert refreshed.expires_at == 1_700_001_800_000
+    assert refreshed.account_id == "account-123"
+    assert refreshed.email == "person@example.com"
 
 
 def test_refresh_credential_preserves_refresh_token_and_updates_valid_metadata() -> None:
@@ -290,10 +285,8 @@ def test_refresh_credential_preserves_refresh_token_and_updates_valid_metadata()
         return httpx.Response(
             200,
             json={
-                "access_token": "new-access",
+                "access_token": make_jwt(account_id="new-account", email="new@example.com"),
                 "expires_in": 1800,
-                "account_id": "new-account",
-                "email": "new@example.com",
             },
         )
 
@@ -304,14 +297,9 @@ def test_refresh_credential_preserves_refresh_token_and_updates_valid_metadata()
         request_timeout=2,
     )
 
-    assert refreshed == Credential(
-        provider="openai-codex",
-        access_token="new-access",
-        refresh_token="old-refresh",
-        expires_at=1_700_001_800_000,
-        account_id="new-account",
-        email="new@example.com",
-    )
+    assert refreshed.refresh_token == "old-refresh"
+    assert refreshed.account_id == "new-account"
+    assert refreshed.email == "new@example.com"
 
 
 def test_refresh_credential_ignores_malformed_metadata() -> None:
@@ -328,10 +316,8 @@ def test_refresh_credential_ignores_malformed_metadata() -> None:
         return httpx.Response(
             200,
             json={
-                "access_token": "new-access",
+                "access_token": make_jwt(),
                 "expires_in": 1800,
-                "account_id": 123,
-                "email": ["new@example.com"],
             },
         )
 

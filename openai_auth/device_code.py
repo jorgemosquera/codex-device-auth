@@ -6,28 +6,44 @@ from typing import Any
 
 import httpx
 
-from openai_auth.credentials import SUPPORTED_PROVIDER, Credential
+from openai_auth.config import (
+    CODEX_CLIENT_ID,
+    DEVICE_CALLBACK_URL,
+    PROVIDER_ORIGINATOR,
+    PROVIDER_USER_AGENT,
+)
+from openai_auth.credentials import (
+    SUPPORTED_PROVIDER,
+    Credential,
+    _decode_jwt_expiry,
+    _decode_jwt_identity,
+)
 from openai_auth.errors import (
-    DeviceCodeDeniedError,
     DeviceCodeNetworkError,
     DeviceCodeResponseError,
     DeviceCodeTimeoutError,
     RefreshTokenError,
 )
 
-PROVIDER = SUPPORTED_PROVIDER
 AUTH_BASE_URL = "https://auth.openai.com"
-DEVICE_CODE_URL = f"{AUTH_BASE_URL}/oauth/device/code"
-DEVICE_POLL_URL = f"{AUTH_BASE_URL}/oauth/device/poll"
+DEVICE_USERCODE_URL = f"{AUTH_BASE_URL}/api/accounts/deviceauth/usercode"
+DEVICE_POLL_URL = f"{AUTH_BASE_URL}/api/accounts/deviceauth/token"
 TOKEN_URL = f"{AUTH_BASE_URL}/oauth/token"
+VERIFICATION_URI = f"{AUTH_BASE_URL}/codex/device"
+
 DEFAULT_MAX_POLL_SECONDS = 600
 DEFAULT_POLL_INTERVAL_SECONDS = 5
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 10
 
+_PROVIDER_HEADERS = {
+    "originator": PROVIDER_ORIGINATOR,
+    "User-Agent": PROVIDER_USER_AGENT,
+}
+
 
 @dataclass(frozen=True)
 class DeviceCodeChallenge:
-    device_code: str
+    device_auth_id: str
     user_code: str
     verification_uri: str
     interval_seconds: int
@@ -49,33 +65,35 @@ def login_with_device_code(
 
     interval_seconds = _poll_interval(challenge.interval_seconds, poll_interval_seconds)
     deadline_ms = current_time_ms() + max_poll_seconds * 1000
-    authorization_code = _poll_for_authorization_code(
+    authorization_code, code_verifier = _poll_for_authorization(
         client,
-        challenge.device_code,
+        challenge,
         deadline_ms,
         interval_seconds,
         request_timeout,
         current_time_ms,
         sleep,
     )
-    token_data = _exchange_authorization_code(client, authorization_code, request_timeout)
+    token_data = _exchange_authorization_code(
+        client, authorization_code, code_verifier, request_timeout
+    )
     return _credential_from_token_response(token_data, current_time_ms())
 
 
 def _request_device_code(client: httpx.Client, request_timeout: float) -> DeviceCodeChallenge:
-    data = _post_json(client, DEVICE_CODE_URL, {"provider": PROVIDER}, request_timeout)
+    data = _post_json(client, DEVICE_USERCODE_URL, {"client_id": CODEX_CLIENT_ID}, request_timeout)
     return _device_code_challenge_from_response(data)
 
 
-def _poll_for_authorization_code(
+def _poll_for_authorization(
     client: httpx.Client,
-    device_code: str,
+    challenge: DeviceCodeChallenge,
     deadline_ms: int,
     interval_seconds: int,
     request_timeout: float,
     now_ms: Callable[[], int],
     sleep: Callable[[float], None],
-) -> str:
+) -> tuple[str, str]:
     max_attempts = _max_poll_attempts(deadline_ms, now_ms(), interval_seconds)
 
     for attempt in range(max_attempts):
@@ -83,15 +101,15 @@ def _poll_for_authorization_code(
         if remaining_seconds <= 0:
             break
 
-        data = _post_json(
+        response = _post_json_raw(
             client,
             DEVICE_POLL_URL,
-            {"device_code": device_code},
+            {"device_auth_id": challenge.device_auth_id, "user_code": challenge.user_code},
             min(request_timeout, remaining_seconds),
         )
-        authorization_code = _authorization_code_from_poll_response(data)
-        if authorization_code is not None:
-            return authorization_code
+        result = _authorization_from_poll_response(response)
+        if result is not None:
+            return result
 
         sleep_seconds = _sleep_seconds_before_next_poll(
             attempt,
@@ -107,12 +125,21 @@ def _poll_for_authorization_code(
 
 
 def _exchange_authorization_code(
-    client: httpx.Client, authorization_code: str, request_timeout: float
+    client: httpx.Client,
+    authorization_code: str,
+    code_verifier: str,
+    request_timeout: float,
 ) -> dict[str, Any]:
-    return _post_json(
+    return _post_form(
         client,
         TOKEN_URL,
-        {"authorization_code": authorization_code, "grant_type": "authorization_code"},
+        {
+            "grant_type": "authorization_code",
+            "code": authorization_code,
+            "redirect_uri": DEVICE_CALLBACK_URL,
+            "client_id": CODEX_CLIENT_ID,
+            "code_verifier": code_verifier,
+        },
         request_timeout,
     )
 
@@ -125,9 +152,13 @@ def refresh_credential(
     request_timeout: float = DEFAULT_REQUEST_TIMEOUT_SECONDS,
 ) -> Credential:
     current_time_ms = now_ms or _system_now_ms
-    payload = {"refresh_token": credential.refresh_token, "grant_type": "refresh_token"}
+    payload = {
+        "grant_type": "refresh_token",
+        "refresh_token": credential.refresh_token,
+        "client_id": CODEX_CLIENT_ID,
+    }
     try:
-        token_data = _post_json(client, TOKEN_URL, payload, request_timeout)
+        token_data = _post_form(client, TOKEN_URL, payload, request_timeout)
         refreshed = _credential_from_refresh_response(token_data, credential, current_time_ms())
     except (DeviceCodeNetworkError, DeviceCodeResponseError) as exc:
         raise RefreshTokenError("refresh failed") from exc
@@ -138,14 +169,40 @@ def refresh_credential(
 def _post_json(
     client: httpx.Client, url: str, payload: dict[str, str], request_timeout: float
 ) -> dict[str, Any]:
+    response = _post_json_raw(client, url, payload, request_timeout)
+    return _parse_response_json(response)
+
+
+def _post_json_raw(
+    client: httpx.Client, url: str, payload: dict[str, str], request_timeout: float
+) -> httpx.Response:
     try:
-        response = client.post(url, json=payload, timeout=request_timeout)
+        return client.post(url, json=payload, headers=_PROVIDER_HEADERS, timeout=request_timeout)
+    except httpx.HTTPError as exc:
+        raise DeviceCodeNetworkError("device code provider request failed") from exc
+
+
+def _post_form(
+    client: httpx.Client, url: str, payload: dict[str, str], request_timeout: float
+) -> dict[str, Any]:
+    try:
+        response = client.post(url, data=payload, headers=_PROVIDER_HEADERS, timeout=request_timeout)
     except httpx.HTTPError as exc:
         raise DeviceCodeNetworkError("device code provider request failed") from exc
 
     if response.status_code < 200 or response.status_code >= 300:
         raise DeviceCodeNetworkError(f"device code provider returned HTTP {response.status_code}")
 
+    return _parse_json_body(response)
+
+
+def _parse_response_json(response: httpx.Response) -> dict[str, Any]:
+    if response.status_code < 200 or response.status_code >= 300:
+        raise DeviceCodeNetworkError(f"device code provider returned HTTP {response.status_code}")
+    return _parse_json_body(response)
+
+
+def _parse_json_body(response: httpx.Response) -> dict[str, Any]:
     try:
         data = response.json()
     except ValueError as exc:
@@ -158,66 +215,83 @@ def _post_json(
 
 
 def _device_code_challenge_from_response(data: dict[str, Any]) -> DeviceCodeChallenge:
-    device_code = data.get("device_code")
-    user_code = data.get("user_code")
-    verification_uri = data.get("verification_uri")
-    interval = data.get("interval", DEFAULT_POLL_INTERVAL_SECONDS)
+    device_auth_id = data.get("device_auth_id")
+    user_code = data.get("user_code") or data.get("usercode")
+    raw_interval = data.get("interval", DEFAULT_POLL_INTERVAL_SECONDS)
 
-    if not isinstance(device_code, str) or not device_code:
+    if not isinstance(device_auth_id, str) or not device_auth_id:
         raise DeviceCodeResponseError("device code response is invalid")
     if not isinstance(user_code, str) or not user_code:
         raise DeviceCodeResponseError("device code response is invalid")
-    if not isinstance(verification_uri, str) or not verification_uri:
-        raise DeviceCodeResponseError("device code response is invalid")
-    if isinstance(interval, bool) or not isinstance(interval, int) or interval <= 0:
+
+    interval = _parse_interval(raw_interval)
+    if interval is None:
         raise DeviceCodeResponseError("device code response is invalid")
 
     return DeviceCodeChallenge(
-        device_code=device_code,
+        device_auth_id=device_auth_id,
         user_code=user_code,
-        verification_uri=verification_uri,
+        verification_uri=VERIFICATION_URI,
         interval_seconds=interval,
     )
 
 
-def _authorization_code_from_poll_response(data: dict[str, Any]) -> str | None:
-    status = data.get("status")
-    if status == "authorization_pending":
+def _parse_interval(value: Any) -> int | None:
+    if isinstance(value, bool):
         return None
-    if status == "denied":
-        raise DeviceCodeDeniedError("device code authorization denied")
-    if status == "failed":
-        raise DeviceCodeDeniedError("device code authorization failed")
-    if status != "authorized":
-        raise DeviceCodeResponseError("device code poll response is invalid")
+    if isinstance(value, int) and value > 0:
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = int(value)
+            return parsed if parsed > 0 else None
+        except ValueError:
+            return None
+    return None
 
+
+def _authorization_from_poll_response(response: httpx.Response) -> tuple[str, str] | None:
+    if response.status_code in (403, 404):
+        return None
+
+    if response.status_code != 200:
+        raise DeviceCodeNetworkError(
+            f"device code poll returned HTTP {response.status_code}"
+        )
+
+    data = _parse_json_body(response)
     authorization_code = data.get("authorization_code")
+    code_verifier = data.get("code_verifier")
+
     if not isinstance(authorization_code, str) or not authorization_code:
         raise DeviceCodeResponseError("device code poll response is invalid")
+    if not isinstance(code_verifier, str) or not code_verifier:
+        raise DeviceCodeResponseError("device code poll response is invalid")
 
-    return authorization_code
+    return authorization_code, code_verifier
 
 
 def _credential_from_token_response(data: dict[str, Any], now_ms: int) -> Credential:
     access_token = data.get("access_token")
     refresh_token = data.get("refresh_token")
     expires_in = data.get("expires_in")
-    account_id = data.get("account_id")
-    email = data.get("email")
 
     if not isinstance(access_token, str) or not access_token:
         raise DeviceCodeResponseError("token response is invalid")
     if not isinstance(refresh_token, str) or not refresh_token:
         raise DeviceCodeResponseError("token response is invalid")
-    if isinstance(expires_in, bool) or not isinstance(expires_in, int) or expires_in <= 0:
-        raise DeviceCodeResponseError("token response is invalid")
+
+    expires_at = _resolve_expires_at(expires_in, access_token, now_ms)
+
+    account_id, email = _decode_jwt_identity(access_token)
+
     return Credential(
-        provider=PROVIDER,
+        provider=SUPPORTED_PROVIDER,
         access_token=access_token,
         refresh_token=refresh_token,
-        expires_at=now_ms + expires_in * 1000,
-        account_id=_optional_string(account_id),
-        email=_optional_string(email),
+        expires_at=expires_at,
+        account_id=account_id,
+        email=email,
     )
 
 
@@ -227,39 +301,41 @@ def _credential_from_refresh_response(
     access_token = data.get("access_token")
     refresh_token = data.get("refresh_token", current.refresh_token)
     expires_in = data.get("expires_in")
-    account_id = _metadata_value(data.get("account_id"), current.account_id)
-    email = _metadata_value(data.get("email"), current.email)
 
     if not isinstance(access_token, str) or not access_token:
         raise DeviceCodeResponseError("token response is invalid")
     if not isinstance(refresh_token, str) or not refresh_token:
         raise DeviceCodeResponseError("token response is invalid")
-    if isinstance(expires_in, bool) or not isinstance(expires_in, int) or expires_in <= 0:
-        raise DeviceCodeResponseError("token response is invalid")
+
+    expires_at = _resolve_expires_at(expires_in, access_token, now_ms)
+
+    new_account_id, new_email = _decode_jwt_identity(access_token)
+    account_id = _metadata_value(new_account_id, current.account_id)
+    email = _metadata_value(new_email, current.email)
 
     return Credential(
         provider=current.provider,
         access_token=access_token,
         refresh_token=refresh_token,
-        expires_at=now_ms + expires_in * 1000,
+        expires_at=expires_at,
         account_id=account_id,
         email=email,
     )
 
 
-def _metadata_value(value: Any, fallback: str | None) -> str | None:
-    extracted = _optional_string(value)
-    if extracted is None:
-        return fallback
+def _resolve_expires_at(expires_in: Any, access_token: str, now_ms: int) -> int:
+    if not isinstance(expires_in, bool) and isinstance(expires_in, int) and expires_in > 0:
+        return now_ms + expires_in * 1000
 
-    return extracted
+    jwt_expiry = _decode_jwt_expiry(access_token)
+    if jwt_expiry is not None:
+        return jwt_expiry
+
+    raise DeviceCodeResponseError("token response is invalid")
 
 
-def _optional_string(value: Any) -> str | None:
-    if isinstance(value, str) and value:
-        return value
-
-    return None
+def _metadata_value(value: str | None, fallback: str | None) -> str | None:
+    return value if value is not None else fallback
 
 
 def _max_poll_attempts(deadline_ms: int, start_ms: int, interval_seconds: int) -> int:
