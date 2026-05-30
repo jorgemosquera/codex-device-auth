@@ -2,9 +2,10 @@ import os
 from pathlib import Path
 
 CREDENTIAL_PATH_ENV = "CODEX_DEVICE_AUTH_CREDENTIAL_PATH"
+PROJECT_NAME_ENV = "CODEX_DEVICE_AUTH_PROJECT"
 DEFAULT_CREDENTIAL_DIR = ".codex_device_auth"
 DEFAULT_CREDENTIAL_FILE = "credentials.json"
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_PROJECT_NAME = "default"
 
 CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 PROVIDER_ORIGINATOR = "openclaw"
@@ -21,4 +22,5 @@ def credential_path() -> Path:
     if configured_path:
         return Path(configured_path).expanduser()
 
-    return PROJECT_ROOT / DEFAULT_CREDENTIAL_DIR / DEFAULT_CREDENTIAL_FILE
+    project_name = os.environ.get(PROJECT_NAME_ENV, DEFAULT_PROJECT_NAME)
+    return Path.home() / DEFAULT_CREDENTIAL_DIR / project_name / DEFAULT_CREDENTIAL_FILE

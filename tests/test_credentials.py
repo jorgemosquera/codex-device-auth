@@ -26,15 +26,26 @@ def _make_jwt(payload: dict) -> str:
     return f"header.{encoded}.sig"
 
 
-def test_credential_path_defaults_to_project_local_file(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_credential_path_defaults_to_user_home(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CODEX_DEVICE_AUTH_CREDENTIAL_PATH", raising=False)
+    monkeypatch.delenv("CODEX_DEVICE_AUTH_PROJECT", raising=False)
 
     path = credential_path()
 
-    assert path == Path(__file__).resolve().parents[1] / ".openai_auth" / "credentials.json"
+    assert path == Path.home() / ".codex_device_auth" / "default" / "credentials.json"
+
+
+def test_credential_path_uses_project_name_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CODEX_DEVICE_AUTH_CREDENTIAL_PATH", raising=False)
+    monkeypatch.setenv("CODEX_DEVICE_AUTH_PROJECT", "my-project")
+
+    path = credential_path()
+
+    assert path == Path.home() / ".codex_device_auth" / "my-project" / "credentials.json"
 
 
 def test_credential_path_uses_env_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("CODEX_DEVICE_AUTH_PROJECT", "ignored-project")
     path = tmp_path / "custom.json"
     monkeypatch.setenv("CODEX_DEVICE_AUTH_CREDENTIAL_PATH", str(path))
 
