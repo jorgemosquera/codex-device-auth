@@ -2,10 +2,8 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import httpx
-from curl_cffi import requests as curl_requests
 
 from openai_auth.config import (
     CODEX_MODEL,
@@ -86,7 +84,7 @@ def run_test_request(
         raise CredentialError("not logged in")
 
     usable_credential = _ensure_fresh_credential(client, credential, path, now_ms, request_timeout)
-    response_text = _send_codex_test_request(usable_credential, request_timeout)
+    response_text = _send_codex_test_request(client, usable_credential, request_timeout)
     return RuntimeTestResult(ok=True, status_code=200, response_text=response_text)
 
 
@@ -119,7 +117,9 @@ def _ensure_fresh_credential(
     return refreshed
 
 
-def _send_codex_test_request(credential: Credential, request_timeout: float) -> str:
+def _send_codex_test_request(
+    client: httpx.Client, credential: Credential, request_timeout: float
+) -> str:
     headers = build_auth_headers(credential)
     headers["content-type"] = "application/json"
     headers["OpenAI-Beta"] = "responses=experimental"
@@ -143,35 +143,28 @@ def _send_codex_test_request(credential: Credential, request_timeout: float) -> 
     }
 
     try:
-        response = curl_requests.post(
-            CODEX_RESPONSES_URL,
-            headers=headers,
-            json=body,
-            impersonate="chrome",
-            timeout=request_timeout,
-            stream=True,
-        )
-    except Exception as exc:
+        with client.stream(
+            "POST", CODEX_RESPONSES_URL, headers=headers, json=body, timeout=request_timeout
+        ) as response:
+            if response.status_code < 200 or response.status_code >= 300:
+                message = redact_secrets(
+                    f"codex request rejected with HTTP {response.status_code}", credential
+                )
+                raise RuntimeRequestError(message)
+
+            return _parse_sse_text(response, credential)
+    except httpx.HTTPError as exc:
         message = redact_secrets("codex request failed", credential)
         raise RuntimeRequestError(message) from exc
 
-    if response.status_code < 200 or response.status_code >= 300:
-        message = redact_secrets(
-            f"codex request rejected with HTTP {response.status_code}", credential
-        )
-        raise RuntimeRequestError(message)
 
-    return _parse_sse_text(response, credential)
-
-
-def _parse_sse_text(response: Any, credential: Credential) -> str:
+def _parse_sse_text(response: httpx.Response, credential: Credential) -> str:
     text_parts: list[str] = []
-    for raw_line in response.iter_lines():
-        line = raw_line if isinstance(raw_line, bytes) else raw_line.encode()
-        if not line.startswith(b"data: "):
+    for line in response.iter_lines():
+        if not line.startswith("data: "):
             continue
         payload = line[6:]
-        if payload == b"[DONE]":
+        if payload == "[DONE]":
             break
         try:
             event = json.loads(payload)
