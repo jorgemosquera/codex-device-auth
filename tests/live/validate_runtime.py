@@ -2,9 +2,9 @@ import sys
 
 import httpx
 
-from openai_auth.config import credential_path
-from openai_auth.credentials import load_credentials, redact_secrets
-from openai_auth.runtime import build_auth_headers
+from codex_device_auth.config import credential_path
+from codex_device_auth.credentials import load_credentials, redact_secrets
+from codex_device_auth.runtime import build_auth_headers
 
 RUNTIME_TEST_URL = "https://chatgpt.com/backend-api/accounts/check"
 

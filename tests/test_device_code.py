@@ -6,10 +6,10 @@ from collections.abc import Callable
 import httpx
 import pytest
 
-from openai_auth.config import CODEX_CLIENT_ID, DEVICE_CALLBACK_URL
-from openai_auth.credentials import Credential
-from openai_auth.device_code import login_with_device_code, refresh_credential
-from openai_auth.errors import (
+from codex_device_auth.config import CODEX_CLIENT_ID, DEVICE_CALLBACK_URL
+from codex_device_auth.credentials import Credential
+from codex_device_auth.device_code import login_with_device_code, refresh_credential
+from codex_device_auth.errors import (
     DeviceCodeNetworkError,
     DeviceCodeResponseError,
     DeviceCodeTimeoutError,

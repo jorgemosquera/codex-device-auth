@@ -5,14 +5,14 @@ from pathlib import Path
 
 import httpx
 
-from openai_auth.config import (
+from codex_device_auth.config import (
     CODEX_MODEL,
     CODEX_RESPONSES_URL,
     CODEX_TEST_PROMPT,
     PROVIDER_ORIGINATOR,
     PROVIDER_USER_AGENT,
 )
-from openai_auth.credentials import (
+from codex_device_auth.credentials import (
     Credential,
     is_expired,
     is_near_expiry,
@@ -20,8 +20,8 @@ from openai_auth.credentials import (
     redact_secrets,
     save_credentials,
 )
-from openai_auth.device_code import DEFAULT_REQUEST_TIMEOUT_SECONDS, refresh_credential
-from openai_auth.errors import CredentialError, RefreshTokenError, RuntimeRequestError
+from codex_device_auth.device_code import DEFAULT_REQUEST_TIMEOUT_SECONDS, refresh_credential
+from codex_device_auth.errors import CredentialError, RefreshTokenError, RuntimeRequestError
 
 
 @dataclass(frozen=True)

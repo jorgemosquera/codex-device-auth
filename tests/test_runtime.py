@@ -4,10 +4,15 @@ from pathlib import Path
 import httpx
 import pytest
 
-from openai_auth.credentials import Credential, save_credentials
-from openai_auth.errors import CredentialError, RuntimeRequestError
-from openai_auth.cli import main
-from openai_auth.runtime import RuntimeTestResult, auth_status, build_auth_headers, run_test_request
+from codex_device_auth.credentials import Credential, save_credentials
+from codex_device_auth.errors import CredentialError, RuntimeRequestError
+from codex_device_auth.cli import main
+from codex_device_auth.runtime import (
+    RuntimeTestResult,
+    auth_status,
+    build_auth_headers,
+    run_test_request,
+)
 
 
 def test_auth_status_reports_not_logged_in(tmp_path: Path) -> None:
@@ -228,7 +233,7 @@ def test_run_test_request_refresh_save_failure_is_sanitized(
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"access_token": "new-access", "expires_in": 1800})
 
-    monkeypatch.setattr("openai_auth.runtime.save_credentials", fake_save)
+    monkeypatch.setattr("codex_device_auth.runtime.save_credentials", fake_save)
 
     with pytest.raises(RuntimeRequestError) as exc_info:
         run_test_request(
@@ -255,7 +260,7 @@ def test_module_entrypoint_dispatches_test_command(
     ) -> RuntimeTestResult:
         return RuntimeTestResult(ok=True, status_code=200, response_text="ok")
 
-    monkeypatch.setattr("openai_auth.cli.run_test_request", fake_run_test_request)
+    monkeypatch.setattr("codex_device_auth.cli.run_test_request", fake_run_test_request)
 
     exit_code = main(["test", "--credential-path", str(tmp_path / "credentials.json")])
 

@@ -6,8 +6,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from openai_auth.config import credential_path
-from openai_auth.errors import CredentialError
+from codex_device_auth.config import credential_path
+from codex_device_auth.errors import CredentialError
 
 SUPPORTED_PROVIDER = "openai-codex"
 

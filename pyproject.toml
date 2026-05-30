@@ -3,7 +3,7 @@ requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "openai-auth"
+name = "codex-device-auth"
 version = "0.1.0"
 description = "Local learning project for OpenAI-style device code authentication"
 readme = "README.md"

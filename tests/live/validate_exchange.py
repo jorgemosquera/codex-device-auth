@@ -4,13 +4,13 @@ import sys
 
 import httpx
 
-from openai_auth.config import (
+from codex_device_auth.config import (
     CODEX_CLIENT_ID,
     DEVICE_CALLBACK_URL,
     PROVIDER_ORIGINATOR,
     PROVIDER_USER_AGENT,
 )
-from openai_auth.credentials import decode_jwt_payload
+from codex_device_auth.credentials import decode_jwt_payload
 
 TOKEN_URL = "https://auth.openai.com/oauth/token"
 

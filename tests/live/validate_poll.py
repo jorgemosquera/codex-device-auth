@@ -4,7 +4,7 @@ import sys
 
 import httpx
 
-from openai_auth.config import PROVIDER_ORIGINATOR, PROVIDER_USER_AGENT
+from codex_device_auth.config import PROVIDER_ORIGINATOR, PROVIDER_USER_AGENT
 
 POLL_URL = "https://auth.openai.com/api/accounts/deviceauth/token"
 

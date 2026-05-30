@@ -7,7 +7,7 @@ import time
 
 import httpx
 
-from openai_auth.credentials import (
+from codex_device_auth.credentials import (
     Credential,
     delete_credentials,
     is_expired,
@@ -16,9 +16,9 @@ from openai_auth.credentials import (
     redact_secrets,
     save_credentials,
 )
-from openai_auth.device_code import login_with_device_code, refresh_credential
-from openai_auth.errors import AuthError, CredentialError
-from openai_auth.runtime import run_test_request
+from codex_device_auth.device_code import login_with_device_code, refresh_credential
+from codex_device_auth.errors import AuthError, CredentialError
+from codex_device_auth.runtime import run_test_request
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -41,7 +41,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="python -m openai_auth")
+    parser = argparse.ArgumentParser(prog="python -m codex_device_auth")
     parser.add_argument(
         "command",
         choices=["login", "status", "refresh", "test", "logout"],

@@ -1,8 +1,8 @@
 import os
 from pathlib import Path
 
-CREDENTIAL_PATH_ENV = "OPENAI_AUTH_CREDENTIAL_PATH"
-DEFAULT_CREDENTIAL_DIR = ".openai_auth"
+CREDENTIAL_PATH_ENV = "CODEX_DEVICE_AUTH_CREDENTIAL_PATH"
+DEFAULT_CREDENTIAL_DIR = ".codex_device_auth"
 DEFAULT_CREDENTIAL_FILE = "credentials.json"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 

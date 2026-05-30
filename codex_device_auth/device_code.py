@@ -6,19 +6,19 @@ from typing import Any
 
 import httpx
 
-from openai_auth.config import (
+from codex_device_auth.config import (
     CODEX_CLIENT_ID,
     DEVICE_CALLBACK_URL,
     PROVIDER_ORIGINATOR,
     PROVIDER_USER_AGENT,
 )
-from openai_auth.credentials import (
+from codex_device_auth.credentials import (
     SUPPORTED_PROVIDER,
     Credential,
     decode_jwt_expiry,
     decode_jwt_identity,
 )
-from openai_auth.errors import (
+from codex_device_auth.errors import (
     DeviceCodeNetworkError,
     DeviceCodeResponseError,
     DeviceCodeTimeoutError,

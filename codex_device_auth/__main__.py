@@ -1,4 +1,4 @@
-from openai_auth.cli import main
+from codex_device_auth.cli import main
 
 
 if __name__ == "__main__":

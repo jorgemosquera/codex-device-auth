@@ -13,14 +13,14 @@ from langchain_core.messages import (
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from pydantic import PrivateAttr
 
-from openai_auth.config import (
+from codex_device_auth.config import (
     CODEX_MODEL,
     CODEX_RESPONSES_URL,
     PROVIDER_ORIGINATOR,
     PROVIDER_USER_AGENT,
 )
-from openai_auth.credentials import Credential, redact_secrets
-from openai_auth.errors import RuntimeRequestError
+from codex_device_auth.credentials import Credential, redact_secrets
+from codex_device_auth.errors import RuntimeRequestError
 
 
 class CodexChatModel(BaseChatModel):

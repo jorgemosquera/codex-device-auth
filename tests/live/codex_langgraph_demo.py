@@ -12,9 +12,9 @@ import httpx
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, StateGraph
 
-from openai_auth.codex_chat_model import CodexChatModel
-from openai_auth.config import credential_path
-from openai_auth.credentials import load_credentials
+from codex_device_auth.codex_chat_model import CodexChatModel
+from codex_device_auth.config import credential_path
+from codex_device_auth.credentials import load_credentials
 
 
 def main() -> int:

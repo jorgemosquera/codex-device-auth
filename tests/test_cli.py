@@ -2,10 +2,10 @@ from pathlib import Path
 
 import pytest
 
-from openai_auth.cli import main
-from openai_auth.credentials import Credential, save_credentials
-from openai_auth.errors import CredentialError, RuntimeRequestError
-from openai_auth.runtime import RuntimeTestResult
+from codex_device_auth.cli import main
+from codex_device_auth.credentials import Credential, save_credentials
+from codex_device_auth.errors import CredentialError, RuntimeRequestError
+from codex_device_auth.runtime import RuntimeTestResult
 
 
 def test_status_reports_logged_out(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -132,7 +132,7 @@ def test_logout_reports_delete_failure(
     def fake_delete(*_args: object, **_kwargs: object) -> None:
         raise CredentialError("credential file could not be deleted")
 
-    monkeypatch.setattr("openai_auth.cli.delete_credentials", fake_delete)
+    monkeypatch.setattr("codex_device_auth.cli.delete_credentials", fake_delete)
 
     exit_code = main(["logout"])
 
@@ -147,7 +147,7 @@ def test_cli_error_output_redacts_token_values(
     def fake_run_test_request(*_args: object, **_kwargs: object) -> RuntimeTestResult:
         raise RuntimeRequestError("failed with access-secret and refresh-secret")
 
-    monkeypatch.setattr("openai_auth.cli.run_test_request", fake_run_test_request)
+    monkeypatch.setattr("codex_device_auth.cli.run_test_request", fake_run_test_request)
 
     exit_code = main(["test", "--credential-path", str(tmp_path / "credentials.json")])
 
@@ -174,7 +174,7 @@ def test_cli_error_output_redacts_loaded_credential_tokens(
     def fake_run_test_request(*_args: object, **_kwargs: object) -> RuntimeTestResult:
         raise RuntimeRequestError("failed with access-secret and refresh-secret")
 
-    monkeypatch.setattr("openai_auth.cli.run_test_request", fake_run_test_request)
+    monkeypatch.setattr("codex_device_auth.cli.run_test_request", fake_run_test_request)
 
     exit_code = main(["test", "--credential-path", str(path)])
 
@@ -199,8 +199,8 @@ def test_login_reports_credential_save_failure(
     def fake_save(*_args: object, **_kwargs: object) -> None:
         raise CredentialError("credential file could not be saved")
 
-    monkeypatch.setattr("openai_auth.cli.login_with_device_code", fake_login)
-    monkeypatch.setattr("openai_auth.cli.save_credentials", fake_save)
+    monkeypatch.setattr("codex_device_auth.cli.login_with_device_code", fake_login)
+    monkeypatch.setattr("codex_device_auth.cli.save_credentials", fake_save)
 
     exit_code = main(["login", "--credential-path", str(tmp_path / "credentials.json")])
 
@@ -234,9 +234,9 @@ def test_dispatch_calls_login_refresh_and_runtime_test(
         calls.append("test")
         return RuntimeTestResult(ok=True, status_code=204)
 
-    monkeypatch.setattr("openai_auth.cli.login_with_device_code", fake_login)
-    monkeypatch.setattr("openai_auth.cli.refresh_credential", fake_refresh)
-    monkeypatch.setattr("openai_auth.cli.run_test_request", fake_test)
+    monkeypatch.setattr("codex_device_auth.cli.login_with_device_code", fake_login)
+    monkeypatch.setattr("codex_device_auth.cli.refresh_credential", fake_refresh)
+    monkeypatch.setattr("codex_device_auth.cli.run_test_request", fake_test)
 
     assert main(["login", "--credential-path", str(path)]) == 0
     assert main(["refresh", "--credential-path", str(path)]) == 0

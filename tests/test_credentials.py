@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from openai_auth.config import credential_path
-from openai_auth.credentials import (
+from codex_device_auth.config import credential_path
+from codex_device_auth.credentials import (
     Credential,
     decode_jwt_expiry,
     decode_jwt_identity,
@@ -18,7 +18,7 @@ from openai_auth.credentials import (
     redact_secrets,
     save_credentials,
 )
-from openai_auth.errors import CredentialError
+from codex_device_auth.errors import CredentialError
 
 
 def _make_jwt(payload: dict) -> str:
@@ -27,7 +27,7 @@ def _make_jwt(payload: dict) -> str:
 
 
 def test_credential_path_defaults_to_project_local_file(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("OPENAI_AUTH_CREDENTIAL_PATH", raising=False)
+    monkeypatch.delenv("CODEX_DEVICE_AUTH_CREDENTIAL_PATH", raising=False)
 
     path = credential_path()
 
@@ -36,7 +36,7 @@ def test_credential_path_defaults_to_project_local_file(monkeypatch: pytest.Monk
 
 def test_credential_path_uses_env_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     path = tmp_path / "custom.json"
-    monkeypatch.setenv("OPENAI_AUTH_CREDENTIAL_PATH", str(path))
+    monkeypatch.setenv("CODEX_DEVICE_AUTH_CREDENTIAL_PATH", str(path))
 
     assert credential_path() == path
 
