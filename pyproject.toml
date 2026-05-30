@@ -5,9 +5,19 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "codex-device-auth"
 version = "0.1.0"
-description = "Local learning project for OpenAI-style device code authentication"
+description = "OpenAI Codex device-code authentication for Python"
 readme = "README.md"
 requires-python = ">=3.11"
+authors = [{name = "Jorge Mosquera", email = "jamosquera@gmail.com"}]
+license = {text = "MIT"}
+keywords = ["openai", "codex", "authentication", "device-code", "langchain"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
 dependencies = [
     "httpx>=0.27.0",
     "langchain-core>=1.4.0",

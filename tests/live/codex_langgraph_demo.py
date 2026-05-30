@@ -20,7 +20,7 @@ from codex_device_auth.credentials import load_credentials
 def main() -> int:
     credential = load_credentials(credential_path())
     if credential is None:
-        print("not logged in — run 'uv run python -m openai_auth login' first", file=sys.stderr)
+        print("not logged in — run 'uv run openai-auth login' first", file=sys.stderr)
         return 1
 
     with httpx.Client() as client:
