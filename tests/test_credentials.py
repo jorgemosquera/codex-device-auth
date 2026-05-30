@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import stat
@@ -8,6 +9,8 @@ import pytest
 from openai_auth.config import credential_path
 from openai_auth.credentials import (
     Credential,
+    _decode_jwt_expiry,
+    _decode_jwt_identity,
     delete_credentials,
     is_expired,
     is_near_expiry,
@@ -16,6 +19,11 @@ from openai_auth.credentials import (
     save_credentials,
 )
 from openai_auth.errors import CredentialError
+
+
+def _make_jwt(payload: dict) -> str:
+    encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b"=").decode()
+    return f"header.{encoded}.sig"
 
 
 def test_credential_path_defaults_to_project_local_file(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -287,3 +295,43 @@ def test_expiry_helpers_detect_expired_and_near_expiry_credentials() -> None:
     assert not is_expired(valid, now_ms=1_700_000_000_000)
     assert is_near_expiry(near_expiry, now_ms=1_700_000_000_000)
     assert not is_near_expiry(valid, now_ms=1_700_000_000_000)
+
+
+def test_decode_jwt_identity_extracts_account_id_and_email() -> None:
+    token = _make_jwt({
+        "https://api.openai.com/auth": {"chatgpt_account_id": "acct-123"},
+        "https://api.openai.com/profile": {"email": "user@example.com"},
+    })
+
+    account_id, email = _decode_jwt_identity(token)
+
+    assert account_id == "acct-123"
+    assert email == "user@example.com"
+
+
+def test_decode_jwt_identity_returns_none_for_absent_claims() -> None:
+    token = _make_jwt({})
+
+    account_id, email = _decode_jwt_identity(token)
+
+    assert account_id is None
+    assert email is None
+
+
+def test_decode_jwt_identity_returns_none_for_malformed_token() -> None:
+    assert _decode_jwt_identity("nodots") == (None, None)
+    assert _decode_jwt_identity("a.b") == (None, None)
+    assert _decode_jwt_identity("a.!!!.c") == (None, None)
+
+
+def test_decode_jwt_expiry_converts_exp_to_milliseconds() -> None:
+    token = _make_jwt({"exp": 1_700_000_000})
+
+    assert _decode_jwt_expiry(token) == 1_700_000_000_000
+
+
+def test_decode_jwt_expiry_returns_none_for_missing_or_invalid_exp() -> None:
+    assert _decode_jwt_expiry(_make_jwt({})) is None
+    assert _decode_jwt_expiry(_make_jwt({"exp": 0})) is None
+    assert _decode_jwt_expiry(_make_jwt({"exp": True})) is None
+    assert _decode_jwt_expiry(_make_jwt({"exp": "1700000000"})) is None

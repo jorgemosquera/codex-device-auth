@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import tempfile
@@ -139,6 +140,56 @@ def credential_from_mapping(data: Any) -> Credential:
         account_id=account_id,
         email=email,
     )
+
+
+def _decode_jwt_payload(access_token: str) -> dict | None:
+    parts = access_token.split(".")
+    if len(parts) != 3:
+        return None
+    try:
+        decoded = base64.urlsafe_b64decode(parts[1] + "==").decode("utf-8")
+        parsed = json.loads(decoded)
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
+        return None
+
+
+def _decode_jwt_identity(access_token: str) -> tuple[str | None, str | None]:
+    payload = _decode_jwt_payload(access_token)
+    if payload is None:
+        return None, None
+
+    account_id: str | None = None
+    auth = payload.get("https://api.openai.com/auth")
+    if isinstance(auth, dict):
+        raw = auth.get("chatgpt_account_id")
+        if isinstance(raw, str) and raw:
+            account_id = raw
+
+    email: str | None = None
+    profile = payload.get("https://api.openai.com/profile")
+    if isinstance(profile, dict):
+        raw = profile.get("email")
+        if isinstance(raw, str) and raw:
+            email = raw
+
+    return account_id, email
+
+
+def _decode_jwt_expiry(access_token: str) -> int | None:
+    payload = _decode_jwt_payload(access_token)
+    if payload is None:
+        return None
+
+    exp = payload.get("exp")
+    if isinstance(exp, bool):
+        return None
+    if not isinstance(exp, (int, float)):
+        return None
+    if exp <= 0:
+        return None
+
+    return int(exp * 1000)
 
 
 def redact_secrets(message: str, credential: Credential | None = None) -> str:
