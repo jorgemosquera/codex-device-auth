@@ -11,6 +11,10 @@ PROVIDER_ORIGINATOR = "openclaw"
 PROVIDER_USER_AGENT = "openclaw"
 DEVICE_CALLBACK_URL = "https://auth.openai.com/deviceauth/callback"
 
+CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses"
+CODEX_MODEL = "gpt-5.5"
+CODEX_TEST_PROMPT = "respond with a single word: ok"
+
 
 def credential_path() -> Path:
     configured_path = os.environ.get(CREDENTIAL_PATH_ENV)

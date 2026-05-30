@@ -1,9 +1,19 @@
+import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import httpx
+from curl_cffi import requests as curl_requests
 
+from openai_auth.config import (
+    CODEX_MODEL,
+    CODEX_RESPONSES_URL,
+    CODEX_TEST_PROMPT,
+    PROVIDER_ORIGINATOR,
+    PROVIDER_USER_AGENT,
+)
 from openai_auth.credentials import (
     Credential,
     is_expired,
@@ -12,12 +22,8 @@ from openai_auth.credentials import (
     redact_secrets,
     save_credentials,
 )
-from openai_auth.config import PROVIDER_ORIGINATOR, PROVIDER_USER_AGENT
 from openai_auth.device_code import DEFAULT_REQUEST_TIMEOUT_SECONDS, refresh_credential
 from openai_auth.errors import CredentialError, RefreshTokenError, RuntimeRequestError
-
-RUNTIME_TEST_URL = "https://chatgpt.com/backend-api/accounts/check"
-MAX_RESPONSE_DETAIL_LENGTH = 200
 
 
 @dataclass(frozen=True)
@@ -31,6 +37,7 @@ class AuthStatus:
 class RuntimeTestResult:
     ok: bool
     status_code: int
+    response_text: str = ""
 
 
 def auth_status(path: Path | None = None, *, now_ms: int) -> AuthStatus:
@@ -79,12 +86,8 @@ def run_test_request(
         raise CredentialError("not logged in")
 
     usable_credential = _ensure_fresh_credential(client, credential, path, now_ms, request_timeout)
-    response = _send_runtime_test_request(client, usable_credential, request_timeout)
-    if response.status_code < 200 or response.status_code >= 300:
-        message = _runtime_rejection_message(response, usable_credential)
-        raise RuntimeRequestError(message)
-
-    return RuntimeTestResult(ok=True, status_code=response.status_code)
+    response_text = _send_codex_test_request(usable_credential, request_timeout)
+    return RuntimeTestResult(ok=True, status_code=200, response_text=response_text)
 
 
 def _ensure_fresh_credential(
@@ -116,53 +119,70 @@ def _ensure_fresh_credential(
     return refreshed
 
 
-def _send_runtime_test_request(
-    client: httpx.Client, credential: Credential, request_timeout: float
-) -> httpx.Response:
+def _send_codex_test_request(credential: Credential, request_timeout: float) -> str:
     headers = build_auth_headers(credential)
+    headers["content-type"] = "application/json"
+    headers["OpenAI-Beta"] = "responses=experimental"
+    headers["accept"] = "text/event-stream"
+
+    body = {
+        "model": CODEX_MODEL,
+        "store": False,
+        "stream": True,
+        "instructions": "You are a helpful assistant.",
+        "input": [
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": CODEX_TEST_PROMPT}],
+            }
+        ],
+        "text": {"verbosity": "low"},
+        "include": ["reasoning.encrypted_content"],
+        "tool_choice": "auto",
+        "parallel_tool_calls": True,
+    }
+
     try:
-        return client.get(RUNTIME_TEST_URL, headers=headers, timeout=request_timeout)
-    except httpx.HTTPError:
-        message = redact_secrets("runtime request failed", credential)
-        raise RuntimeRequestError(message) from None
+        response = curl_requests.post(
+            CODEX_RESPONSES_URL,
+            headers=headers,
+            json=body,
+            impersonate="chrome",
+            timeout=request_timeout,
+            stream=True,
+        )
+    except Exception as exc:
+        message = redact_secrets("codex request failed", credential)
+        raise RuntimeRequestError(message) from exc
+
+    if response.status_code < 200 or response.status_code >= 300:
+        message = redact_secrets(
+            f"codex request rejected with HTTP {response.status_code}", credential
+        )
+        raise RuntimeRequestError(message)
+
+    return _parse_sse_text(response, credential)
 
 
-def _runtime_rejection_message(response: httpx.Response, credential: Credential) -> str:
-    detail = _response_detail(response)
-    message = f"runtime request rejected with HTTP {response.status_code}: {detail}"
-    return redact_secrets(message, credential)
+def _parse_sse_text(response: Any, credential: Credential) -> str:
+    text_parts: list[str] = []
+    for raw_line in response.iter_lines():
+        line = raw_line if isinstance(raw_line, bytes) else raw_line.encode()
+        if not line.startswith(b"data: "):
+            continue
+        payload = line[6:]
+        if payload == b"[DONE]":
+            break
+        try:
+            event = json.loads(payload)
+        except ValueError:
+            continue
+        if event.get("type") == "response.output_text.delta":
+            delta = event.get("delta", "")
+            if isinstance(delta, str):
+                text_parts.append(delta)
 
-
-def _response_detail(response: httpx.Response) -> str:
-    try:
-        data = response.json()
-    except ValueError:
-        return "request rejected"
-
-    if isinstance(data, dict):
-        detail = _safe_error_detail(data)
-        if detail is not None:
-            return detail
-
-    return "request rejected"
-
-
-def _safe_error_detail(data: dict[object, object]) -> str | None:
-    error = data.get("error")
-    if isinstance(error, str) and error:
-        return _truncate(error)
-    if not isinstance(error, dict):
-        return None
-
-    message = error.get("message")
-    if isinstance(message, str) and message:
-        return _truncate(message)
-
-    return None
-
-
-def _truncate(value: str) -> str:
-    if len(value) <= MAX_RESPONSE_DETAIL_LENGTH:
-        return value
-
-    return f"{value[:MAX_RESPONSE_DETAIL_LENGTH]}..."
+    result = "".join(text_parts)
+    if not result:
+        raise RuntimeRequestError("codex response contained no text")
+    return redact_secrets(result, credential)

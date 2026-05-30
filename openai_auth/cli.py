@@ -131,7 +131,7 @@ def _test_command(path: Path | None) -> int:
             print(_redacted_error(exc, credential), file=sys.stderr)
             return 1
 
-    print(f"authenticated request succeeded: HTTP {result.status_code}")
+    print(f"authenticated codex request succeeded: {result.response_text!r}")
     return 0
 
 

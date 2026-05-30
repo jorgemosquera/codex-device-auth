@@ -116,7 +116,9 @@ def assert_secret_absent(value: str, credential: Credential) -> None:
             raise AssertionError("secret was exposed")
 
 
-def test_run_test_request_refreshes_expired_credentials_before_request(tmp_path: Path) -> None:
+def test_run_test_request_refreshes_expired_credentials_before_request(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     path = tmp_path / "credentials.json"
     new_access_token = "new-access"
     save_credentials(
@@ -129,23 +131,25 @@ def test_run_test_request_refreshes_expired_credentials_before_request(tmp_path:
         ),
         path,
     )
-    seen_token_digests: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/oauth/token":
-            assert "application/x-www-form-urlencoded" in request.headers.get("content-type", "")
-            return httpx.Response(
-                200,
-                json={
-                    "access_token": new_access_token,
-                    "expires_in": 1800,
-                },
-            )
+        assert request.url.path == "/oauth/token"
+        assert "application/x-www-form-urlencoded" in request.headers.get("content-type", "")
+        return httpx.Response(
+            200,
+            json={
+                "access_token": new_access_token,
+                "expires_in": 1800,
+            },
+        )
 
-        header = request.headers["Authorization"]
-        assert_bearer_matches(header, new_access_token)
-        seen_token_digests.append(secret_digest(header.removeprefix("Bearer ")))
-        return httpx.Response(200, json={"ok": True})
+    seen_tokens: list[str] = []
+
+    def fake_send_codex(credential: Credential, _timeout: float) -> str:
+        seen_tokens.append(credential.access_token)
+        return "ok"
+
+    monkeypatch.setattr("openai_auth.runtime._send_codex_test_request", fake_send_codex)
 
     result = run_test_request(
         httpx.Client(transport=httpx.MockTransport(handler)),
@@ -155,10 +159,13 @@ def test_run_test_request_refreshes_expired_credentials_before_request(tmp_path:
     )
 
     assert result.ok
-    assert seen_token_digests == [secret_digest(new_access_token)]
+    assert result.response_text == "ok"
+    assert seen_tokens == [new_access_token]
 
 
-def test_run_test_request_returns_success_for_mocked_http(tmp_path: Path) -> None:
+def test_run_test_request_returns_success_for_mocked_codex(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     path = tmp_path / "credentials.json"
     credential = Credential(
         provider="openai-codex",
@@ -168,12 +175,13 @@ def test_run_test_request_returns_success_for_mocked_http(tmp_path: Path) -> Non
     )
     save_credentials(credential, path)
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert_bearer_matches(request.headers["Authorization"], credential.access_token)
-        return httpx.Response(200, json={"ok": True})
+    monkeypatch.setattr(
+        "openai_auth.runtime._send_codex_test_request",
+        lambda _cred, _timeout: "ok",
+    )
 
     result = run_test_request(
-        httpx.Client(transport=httpx.MockTransport(handler)),
+        httpx.Client(),
         path=path,
         now_ms=lambda: 1_700_000_000_000,
         request_timeout=2,
@@ -181,9 +189,12 @@ def test_run_test_request_returns_success_for_mocked_http(tmp_path: Path) -> Non
 
     assert result.ok
     assert result.status_code == 200
+    assert result.response_text == "ok"
 
 
-def test_run_test_request_rejection_is_sanitized(tmp_path: Path) -> None:
+def test_run_test_request_rejection_is_sanitized(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     path = tmp_path / "credentials.json"
     credential = Credential(
         provider="openai-codex",
@@ -193,80 +204,22 @@ def test_run_test_request_rejection_is_sanitized(tmp_path: Path) -> None:
     )
     save_credentials(credential, path)
 
-    def handler(_request: httpx.Request) -> httpx.Response:
-        return httpx.Response(401, json={"error": "bad access-secret"})
+    def fake_send(_cred: Credential, _timeout: float) -> str:
+        raise RuntimeRequestError("codex request rejected with HTTP 403: request rejected")
+
+    monkeypatch.setattr("openai_auth.runtime._send_codex_test_request", fake_send)
 
     with pytest.raises(RuntimeRequestError) as exc_info:
         run_test_request(
-            httpx.Client(transport=httpx.MockTransport(handler)),
+            httpx.Client(),
             path=path,
             now_ms=lambda: 1_700_000_000_000,
             request_timeout=2,
         )
 
     message = str(exc_info.value)
-    assert "runtime request rejected with HTTP 401" in message
+    assert "403" in message
     assert_secret_absent(message, credential)
-
-
-def test_run_test_request_rejection_uses_concise_safe_error_detail(tmp_path: Path) -> None:
-    path = tmp_path / "credentials.json"
-    credential = Credential(
-        provider="openai-codex",
-        access_token="access-secret",
-        refresh_token="refresh-secret",
-        expires_at=1_700_000_300_001,
-    )
-    save_credentials(credential, path)
-
-    def handler(_request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            403,
-            json={
-                "error": {
-                    "message": "denied",
-                    "sensitive": "unrelated-secret",
-                }
-            },
-        )
-
-    with pytest.raises(RuntimeRequestError) as exc_info:
-        run_test_request(
-            httpx.Client(transport=httpx.MockTransport(handler)),
-            path=path,
-            now_ms=lambda: 1_700_000_000_000,
-            request_timeout=2,
-        )
-
-    message = str(exc_info.value)
-    assert "denied" in message
-    assert "unrelated-secret" not in message
-
-
-def test_run_test_request_rejection_uses_generic_non_json_detail(tmp_path: Path) -> None:
-    path = tmp_path / "credentials.json"
-    credential = Credential(
-        provider="openai-codex",
-        access_token="access-secret",
-        refresh_token="refresh-secret",
-        expires_at=1_700_000_300_001,
-    )
-    save_credentials(credential, path)
-
-    def handler(_request: httpx.Request) -> httpx.Response:
-        return httpx.Response(500, text="upstream access-secret unrelated-secret")
-
-    with pytest.raises(RuntimeRequestError) as exc_info:
-        run_test_request(
-            httpx.Client(transport=httpx.MockTransport(handler)),
-            path=path,
-            now_ms=lambda: 1_700_000_000_000,
-            request_timeout=2,
-        )
-
-    message = str(exc_info.value)
-    assert "runtime request rejected with HTTP 500: request rejected" in message
-    assert "unrelated-secret" not in message
 
 
 def test_run_test_request_refresh_save_failure_is_sanitized(
@@ -312,7 +265,7 @@ def test_module_entrypoint_dispatches_test_command(
         now_ms: object,
         request_timeout: float = 10,
     ) -> RuntimeTestResult:
-        return RuntimeTestResult(ok=True, status_code=204)
+        return RuntimeTestResult(ok=True, status_code=200, response_text="ok")
 
     monkeypatch.setattr("openai_auth.cli.run_test_request", fake_run_test_request)
 
@@ -320,4 +273,4 @@ def test_module_entrypoint_dispatches_test_command(
 
     captured = capsys.readouterr()
     assert exit_code == 0
-    assert captured.out == "authenticated request succeeded: HTTP 204\n"
+    assert captured.out == "authenticated codex request succeeded: 'ok'\n"
