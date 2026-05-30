@@ -32,11 +32,11 @@ uv sync --dev
 ## Commands
 
 ```bash
-openai-auth login
-openai-auth status
-openai-auth refresh
-openai-auth test
-openai-auth logout
+codex-device-auth login
+codex-device-auth status
+codex-device-auth refresh
+codex-device-auth test
+codex-device-auth logout
 ```
 
 Or via the module:
@@ -139,4 +139,4 @@ The demo exercises four scenarios:
 3. Token-by-token streaming with `model.stream()`
 4. A `StateGraph` workflow using the model as a node
 
-Requires saved credentials — run `openai-auth login` first.
+Requires saved credentials — run `codex-device-auth login` first.

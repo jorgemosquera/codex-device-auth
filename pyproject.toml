@@ -31,7 +31,7 @@ dev = [
 ]
 
 [project.scripts]
-openai-auth = "codex_device_auth.cli:main"
+codex-device-auth = "codex_device_auth.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
