@@ -6,7 +6,7 @@ import pytest
 
 from openai_auth.credentials import Credential, save_credentials
 from openai_auth.errors import RuntimeRequestError
-from openai_auth.__main__ import main
+from openai_auth.cli import main
 from openai_auth.runtime import RuntimeTestResult, auth_status, build_auth_headers, run_test_request
 
 
@@ -218,7 +218,7 @@ def test_module_entrypoint_dispatches_test_command(
     ) -> RuntimeTestResult:
         return RuntimeTestResult(ok=True, status_code=204)
 
-    monkeypatch.setattr("openai_auth.__main__.run_test_request", fake_run_test_request)
+    monkeypatch.setattr("openai_auth.cli.run_test_request", fake_run_test_request)
 
     exit_code = main(["test"])
 

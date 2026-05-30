@@ -1,0 +1,133 @@
+from collections.abc import Sequence
+import argparse
+from pathlib import Path
+import re
+import sys
+import time
+
+import httpx
+
+from openai_auth.credentials import (
+    Credential,
+    delete_credentials,
+    load_credentials,
+    redact_secrets,
+    save_credentials,
+)
+from openai_auth.device_code import login_with_device_code, refresh_credential
+from openai_auth.errors import AuthError, CredentialError
+from openai_auth.runtime import auth_status, run_test_request
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    credential_path = _credential_path_arg(args.credential_path)
+
+    if args.command == "login":
+        return _login_command(credential_path)
+    if args.command == "status":
+        return _status_command(credential_path)
+    if args.command == "refresh":
+        return _refresh_command(credential_path)
+    if args.command == "test":
+        return _test_command(credential_path)
+    if args.command == "logout":
+        return _logout_command(credential_path)
+
+    return 2
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="python -m openai_auth")
+    parser.add_argument(
+        "command",
+        choices=["login", "status", "refresh", "test", "logout"],
+    )
+    parser.add_argument("--credential-path")
+    return parser
+
+
+def _credential_path_arg(value: str | None) -> Path | None:
+    if value is None:
+        return None
+
+    return Path(value)
+
+
+def _login_command(path: Path | None) -> int:
+    with httpx.Client() as client:
+        try:
+            credential = login_with_device_code(client)
+            save_credentials(credential, path)
+        except AuthError as exc:
+            print(_redacted_error(exc), file=sys.stderr)
+            return 1
+
+    print("logged in")
+    return 0
+
+
+def _status_command(path: Path | None) -> int:
+    status = auth_status(path, now_ms=_now_ms())
+    if status.state == "not_logged_in":
+        print("not logged in")
+        return 0
+
+    parts = [status.state]
+    if status.account_id is not None:
+        parts.append(f"account={status.account_id}")
+    if status.email is not None:
+        parts.append(f"email={status.email}")
+
+    print(" ".join(parts))
+    return 0
+
+
+def _refresh_command(path: Path | None) -> int:
+    credential = load_credentials(path)
+    if credential is None:
+        print("not logged in", file=sys.stderr)
+        return 1
+
+    with httpx.Client() as client:
+        try:
+            refreshed = refresh_credential(client, credential, now_ms=_now_ms)
+            save_credentials(refreshed, path)
+        except AuthError as exc:
+            print(_redacted_error(exc, credential), file=sys.stderr)
+            return 1
+
+    print("refreshed")
+    return 0
+
+
+def _test_command(path: Path | None) -> int:
+    credential = load_credentials(path)
+    with httpx.Client() as client:
+        try:
+            result = run_test_request(client, path=path, now_ms=_now_ms)
+        except CredentialError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        except AuthError as exc:
+            print(_redacted_error(exc, credential), file=sys.stderr)
+            return 1
+
+    print(f"authenticated request succeeded: HTTP {result.status_code}")
+    return 0
+
+
+def _logout_command(path: Path | None) -> int:
+    delete_credentials(path)
+    print("logged out")
+    return 0
+
+
+def _redacted_error(exc: AuthError, credential: Credential | None = None) -> str:
+    message = redact_secrets(str(exc), credential)
+    return re.sub(r"\b(?:access|refresh)-[A-Za-z0-9._-]+\b", "[REDACTED]", message)
+
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
