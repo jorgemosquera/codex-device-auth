@@ -1,7 +1,13 @@
+from hashlib import sha256
 from pathlib import Path
 
+import httpx
+import pytest
+
 from openai_auth.credentials import Credential, save_credentials
-from openai_auth.runtime import auth_status
+from openai_auth.errors import RuntimeRequestError
+from openai_auth.__main__ import main
+from openai_auth.runtime import RuntimeTestResult, auth_status, build_auth_headers, run_test_request
 
 
 def test_auth_status_reports_not_logged_in(tmp_path: Path) -> None:
@@ -53,3 +59,169 @@ def test_auth_status_reports_valid_expired_and_near_expired(tmp_path: Path) -> N
     )
 
     assert auth_status(path, now_ms=1_700_000_000_000).state == "expired"
+
+
+def test_build_auth_headers_include_bearer_and_account_id() -> None:
+    credential = Credential(
+        provider="openai-codex",
+        access_token="access-secret",
+        refresh_token="refresh-secret",
+        expires_at=1_700_000_300_001,
+        account_id="account-123",
+    )
+
+    headers = build_auth_headers(credential)
+
+    assert_bearer_matches(headers["Authorization"], credential.access_token)
+    assert headers["OpenAI-Account"] == "account-123"
+
+
+def test_header_failure_output_does_not_expose_token_values() -> None:
+    credential = Credential(
+        provider="openai-codex",
+        access_token="access-secret",
+        refresh_token="refresh-secret",
+        expires_at=1_700_000_300_001,
+    )
+
+    sanitized = repr(sanitized_headers_for_assertion(credential))
+
+    assert_secret_absent(sanitized, credential)
+
+
+def sanitized_headers_for_assertion(credential: Credential) -> dict[str, str]:
+    headers = build_auth_headers(credential)
+    return {**headers, "Authorization": "[REDACTED]"}
+
+
+def secret_digest(value: str) -> str:
+    return sha256(value.encode("utf-8")).hexdigest()
+
+
+def assert_bearer_matches(authorization: str, expected_token: str) -> None:
+    if not authorization.startswith("Bearer "):
+        raise AssertionError("authorization header missing bearer prefix")
+
+    actual_digest = secret_digest(authorization.removeprefix("Bearer "))
+    expected_digest = secret_digest(expected_token)
+    if actual_digest != expected_digest:
+        raise AssertionError("authorization bearer token mismatch")
+
+
+def assert_secret_absent(value: str, credential: Credential) -> None:
+    for secret in (credential.access_token, credential.refresh_token):
+        if secret in value:
+            raise AssertionError("secret was exposed")
+
+
+def test_run_test_request_refreshes_expired_credentials_before_request(tmp_path: Path) -> None:
+    path = tmp_path / "credentials.json"
+    new_access_token = "new-access"
+    save_credentials(
+        Credential(
+            provider="openai-codex",
+            access_token="old-access",
+            refresh_token="old-refresh",
+            expires_at=1_700_000_000_000,
+            account_id="account-123",
+        ),
+        path,
+    )
+    seen_token_digests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/oauth/token":
+            return httpx.Response(
+                200,
+                json={
+                    "access_token": new_access_token,
+                    "expires_in": 1800,
+                },
+            )
+
+        header = request.headers["Authorization"]
+        assert_bearer_matches(header, new_access_token)
+        seen_token_digests.append(secret_digest(header.removeprefix("Bearer ")))
+        return httpx.Response(200, json={"ok": True})
+
+    result = run_test_request(
+        httpx.Client(transport=httpx.MockTransport(handler)),
+        path=path,
+        now_ms=lambda: 1_700_000_000_000,
+        request_timeout=2,
+    )
+
+    assert result.ok
+    assert seen_token_digests == [secret_digest(new_access_token)]
+
+
+def test_run_test_request_returns_success_for_mocked_http(tmp_path: Path) -> None:
+    path = tmp_path / "credentials.json"
+    credential = Credential(
+        provider="openai-codex",
+        access_token="access-secret",
+        refresh_token="refresh-secret",
+        expires_at=1_700_000_300_001,
+    )
+    save_credentials(credential, path)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert_bearer_matches(request.headers["Authorization"], credential.access_token)
+        return httpx.Response(200, json={"ok": True})
+
+    result = run_test_request(
+        httpx.Client(transport=httpx.MockTransport(handler)),
+        path=path,
+        now_ms=lambda: 1_700_000_000_000,
+        request_timeout=2,
+    )
+
+    assert result.ok
+    assert result.status_code == 200
+
+
+def test_run_test_request_rejection_is_sanitized(tmp_path: Path) -> None:
+    path = tmp_path / "credentials.json"
+    credential = Credential(
+        provider="openai-codex",
+        access_token="access-secret",
+        refresh_token="refresh-secret",
+        expires_at=1_700_000_300_001,
+    )
+    save_credentials(credential, path)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"error": "bad access-secret"})
+
+    with pytest.raises(RuntimeRequestError) as exc_info:
+        run_test_request(
+            httpx.Client(transport=httpx.MockTransport(handler)),
+            path=path,
+            now_ms=lambda: 1_700_000_000_000,
+            request_timeout=2,
+        )
+
+    message = str(exc_info.value)
+    assert "runtime request rejected with HTTP 401" in message
+    assert_secret_absent(message, credential)
+
+
+def test_module_entrypoint_dispatches_test_command(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fake_run_test_request(
+        _client: httpx.Client,
+        *,
+        path: Path | None = None,
+        now_ms: object,
+        request_timeout: float = 10,
+    ) -> RuntimeTestResult:
+        return RuntimeTestResult(ok=True, status_code=204)
+
+    monkeypatch.setattr("openai_auth.__main__.run_test_request", fake_run_test_request)
+
+    exit_code = main(["test"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.out == "authenticated request succeeded: HTTP 204\n"

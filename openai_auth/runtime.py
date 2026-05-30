@@ -1,7 +1,21 @@
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from openai_auth.credentials import Credential, is_expired, is_near_expiry, load_credentials
+import httpx
+
+from openai_auth.credentials import (
+    Credential,
+    is_expired,
+    is_near_expiry,
+    load_credentials,
+    redact_secrets,
+    save_credentials,
+)
+from openai_auth.device_code import DEFAULT_REQUEST_TIMEOUT_SECONDS, refresh_credential
+from openai_auth.errors import CredentialError, RefreshTokenError, RuntimeRequestError
+
+RUNTIME_TEST_URL = "https://chatgpt.com/backend-api/accounts/check"
 
 
 @dataclass(frozen=True)
@@ -9,6 +23,12 @@ class AuthStatus:
     state: str
     account_id: str | None = None
     email: str | None = None
+
+
+@dataclass(frozen=True)
+class RuntimeTestResult:
+    ok: bool
+    status_code: int
 
 
 def auth_status(path: Path | None = None, *, now_ms: int) -> AuthStatus:
@@ -31,3 +51,82 @@ def _credential_state(credential: Credential, now_ms: int) -> str:
         return "near_expiry"
 
     return "valid"
+
+
+def build_auth_headers(credential: Credential) -> dict[str, str]:
+    headers = {"Authorization": f"Bearer {credential.access_token}"}
+    if credential.account_id is not None:
+        headers["OpenAI-Account"] = credential.account_id
+
+    return headers
+
+
+def run_test_request(
+    client: httpx.Client,
+    *,
+    path: Path | None = None,
+    now_ms: Callable[[], int],
+    request_timeout: float = DEFAULT_REQUEST_TIMEOUT_SECONDS,
+) -> RuntimeTestResult:
+    credential = load_credentials(path)
+    if credential is None:
+        raise CredentialError("not logged in")
+
+    usable_credential = _ensure_fresh_credential(client, credential, path, now_ms, request_timeout)
+    response = _send_runtime_test_request(client, usable_credential, request_timeout)
+    if response.status_code < 200 or response.status_code >= 300:
+        message = _runtime_rejection_message(response, usable_credential)
+        raise RuntimeRequestError(message)
+
+    return RuntimeTestResult(ok=True, status_code=response.status_code)
+
+
+def _ensure_fresh_credential(
+    client: httpx.Client,
+    credential: Credential,
+    path: Path | None,
+    now_ms: Callable[[], int],
+    request_timeout: float,
+) -> Credential:
+    now = now_ms()
+    if not is_near_expiry(credential, now_ms=now):
+        return credential
+
+    try:
+        refreshed = refresh_credential(
+            client,
+            credential,
+            now_ms=now_ms,
+            request_timeout=request_timeout,
+        )
+    except RefreshTokenError:
+        raise RuntimeRequestError("refresh failed before runtime request") from None
+
+    save_credentials(refreshed, path)
+    return refreshed
+
+
+def _send_runtime_test_request(
+    client: httpx.Client, credential: Credential, request_timeout: float
+) -> httpx.Response:
+    headers = build_auth_headers(credential)
+    try:
+        return client.get(RUNTIME_TEST_URL, headers=headers, timeout=request_timeout)
+    except httpx.HTTPError:
+        message = redact_secrets("runtime request failed", credential)
+        raise RuntimeRequestError(message) from None
+
+
+def _runtime_rejection_message(response: httpx.Response, credential: Credential) -> str:
+    detail = _response_detail(response)
+    message = f"runtime request rejected with HTTP {response.status_code}: {detail}"
+    return redact_secrets(message, credential)
+
+
+def _response_detail(response: httpx.Response) -> str:
+    try:
+        data = response.json()
+    except ValueError:
+        return response.text
+
+    return str(data)

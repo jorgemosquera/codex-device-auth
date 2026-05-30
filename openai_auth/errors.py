@@ -28,3 +28,7 @@ class DeviceCodeTimeoutError(DeviceCodeError):
 
 class RefreshTokenError(AuthError):
     """Raised when a refresh-token exchange fails."""
+
+
+class RuntimeRequestError(AuthError):
+    """Raised when an authenticated runtime test request fails."""
