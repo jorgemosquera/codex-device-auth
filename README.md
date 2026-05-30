@@ -1,8 +1,8 @@
-# openai-auth
+# codex-device-auth
 
-Local learning project for experimenting with an OpenAI-style device-code auth flow in Python.
+OpenAI Codex device-code authentication for Python. Authenticate with your ChatGPT account and use the resulting token to drive real LLM inference — no paid API key required.
 
-This is not an official OpenAI API authentication replacement, not a production login system, and not intended for shared-user deployments. It stores local credentials so you can study the auth lifecycle end to end.
+This is not an official OpenAI library, not a production login system, and not intended for shared-user deployments. It is a learning project for studying the auth lifecycle end to end.
 
 ## What this project demonstrates
 
@@ -15,7 +15,15 @@ This project validates the full lifecycle:
 3. **Real inference** — the `test` command proves the stored token drives live GPT-5.5 completions via the Codex Responses API (SSE streaming).
 4. **LangChain integration** — `CodexChatModel` makes the token-based auth transparent. Standard LangChain patterns (`invoke`, `stream`, LangGraph `StateGraph`) work without modification.
 
-## Setup
+## Installation
+
+```bash
+uv add git+https://github.com/jamosquera/codex-device-auth
+# or
+pip install git+https://github.com/jamosquera/codex-device-auth
+```
+
+## Setup (this repo)
 
 ```bash
 uv sync --dev
@@ -24,16 +32,71 @@ uv sync --dev
 ## Commands
 
 ```bash
-uv run python -m openai_auth login
-uv run python -m openai_auth status
-uv run python -m openai_auth refresh
-uv run python -m openai_auth test
-uv run python -m openai_auth logout
+openai-auth login
+openai-auth status
+openai-auth refresh
+openai-auth test
+openai-auth logout
 ```
 
-Credentials default to `.openai_auth/credentials.json` under the project root. Set `OPENAI_AUTH_CREDENTIAL_PATH` or pass `--credential-path` in tests and experiments to use another file.
+Or via the module:
+
+```bash
+uv run python -m codex_device_auth login
+```
+
+Credentials default to `~/.codex_device_auth/default/credentials.json`. Set
+`CODEX_DEVICE_AUTH_PROJECT` to isolate credentials per project:
+
+```bash
+export CODEX_DEVICE_AUTH_PROJECT=my-project
+# credentials will be stored at ~/.codex_device_auth/my-project/credentials.json
+```
+
+Set `CODEX_DEVICE_AUTH_CREDENTIAL_PATH` to an explicit path to override both:
+
+```bash
+export CODEX_DEVICE_AUTH_CREDENTIAL_PATH=/path/to/credentials.json
+```
+
+Pass `--credential-path` to any command for a one-off override.
 
 The CLI keeps output concise and must not print access or refresh token values.
+
+## Using with LangChain
+
+```bash
+uv add langchain-core langgraph
+```
+
+```python
+import httpx
+from langchain_core.messages import HumanMessage, SystemMessage
+from codex_device_auth import CodexChatModel, load_credentials, credential_path
+
+credential = load_credentials(credential_path())
+
+with httpx.Client() as client:
+    model = CodexChatModel(credential=credential, client=client)
+
+    # invoke
+    response = model.invoke([HumanMessage(content="What is 2 + 2?")])
+    print(response.content)
+
+    # system prompt
+    response = model.invoke([
+        SystemMessage(content="You are a pirate. Always respond in pirate speak."),
+        HumanMessage(content="What is the capital of France?"),
+    ])
+    print(response.content)
+
+    # streaming
+    for chunk in model.stream([HumanMessage(content="Count from 1 to 5.")]):
+        print(chunk.content, end="", flush=True)
+```
+
+See [`tests/live/codex_langgraph_demo.py`](tests/live/codex_langgraph_demo.py) for a complete
+example including a LangGraph `StateGraph` workflow.
 
 ## Development
 
@@ -61,9 +124,9 @@ the upstream auth protocol changes.
 
 ### LangChain / LangGraph Demo
 
-`CodexChatModel` in `openai_auth/codex_chat_model.py` is a LangChain
-`BaseChatModel` subclass that routes calls through the Codex Responses
-endpoint using your stored credentials. It supports `invoke()` and `stream()`.
+`CodexChatModel` in [`codex_device_auth/codex_chat_model.py`](codex_device_auth/codex_chat_model.py)
+is a LangChain `BaseChatModel` subclass that routes calls through the Codex Responses endpoint
+using your stored credentials. It supports `invoke()` and `stream()`.
 
 ```bash
 uv run python tests/live/codex_langgraph_demo.py
@@ -76,4 +139,4 @@ The demo exercises four scenarios:
 3. Token-by-token streaming with `model.stream()`
 4. A `StateGraph` workflow using the model as a node
 
-Requires saved credentials — run `login` first.
+Requires saved credentials — run `openai-auth login` first.
