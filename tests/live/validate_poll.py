@@ -4,9 +4,9 @@ import sys
 
 import httpx
 
+from openai_auth.config import PROVIDER_ORIGINATOR, PROVIDER_USER_AGENT
+
 POLL_URL = "https://auth.openai.com/api/accounts/deviceauth/token"
-ORIGINATOR = "openclaw"
-USER_AGENT = "openclaw"
 
 
 def _redact(text: str) -> str:
@@ -29,7 +29,7 @@ def main() -> int:
         return 1
 
     payload = {"device_auth_id": device_auth_id, "user_code": user_code}
-    headers = {"originator": ORIGINATOR, "User-Agent": USER_AGENT}
+    headers = {"originator": PROVIDER_ORIGINATOR, "User-Agent": PROVIDER_USER_AGENT}
 
     print("=== REQUEST ===")
     print(f"URL: {POLL_URL}")

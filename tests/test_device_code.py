@@ -17,7 +17,9 @@ from openai_auth.errors import (
 )
 
 
-def make_jwt(account_id: str | None = None, email: str | None = None, exp: int | None = None) -> str:
+def make_jwt(
+    account_id: str | None = None, email: str | None = None, exp: int | None = None
+) -> str:
     payload: dict = {}
     if account_id is not None:
         payload["https://api.openai.com/auth"] = {"chatgpt_account_id": account_id}
@@ -330,6 +332,39 @@ def test_refresh_credential_ignores_malformed_metadata() -> None:
 
     assert refreshed.account_id == "old-account"
     assert refreshed.email == "old@example.com"
+
+
+def test_login_with_device_code_uses_jwt_exp_when_expires_in_absent() -> None:
+    exp_seconds = 1_700_001_800
+    expected_expires_at = exp_seconds * 1000
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/deviceauth/usercode"):
+            return httpx.Response(
+                200, json={"device_auth_id": "device-123", "user_code": "ABCD-EFGH", "interval": 5}
+            )
+        if request.url.path.endswith("/deviceauth/token"):
+            return httpx.Response(
+                200, json={"authorization_code": "auth-123", "code_verifier": "verifier-abc"}
+            )
+        return httpx.Response(
+            200,
+            json={
+                "access_token": make_jwt(exp=exp_seconds),
+                "refresh_token": "refresh-123",
+            },
+        )
+
+    credential = login_with_device_code(
+        make_client(handler),
+        output=lambda _: None,
+        now_ms=lambda: 1_700_000_000_000,
+        sleep=lambda _: None,
+        max_poll_seconds=30,
+        request_timeout=2,
+    )
+
+    assert credential.expires_at == expected_expires_at
 
 
 def test_refresh_credential_failure_is_sanitized() -> None:

@@ -3,10 +3,9 @@ import sys
 
 import httpx
 
-CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
+from openai_auth.config import CODEX_CLIENT_ID, PROVIDER_ORIGINATOR, PROVIDER_USER_AGENT
+
 USERCODE_URL = "https://auth.openai.com/api/accounts/deviceauth/usercode"
-ORIGINATOR = "openclaw"
-USER_AGENT = "openclaw"
 
 
 def _redact(text: str) -> str:
@@ -15,7 +14,7 @@ def _redact(text: str) -> str:
 
 def main() -> int:
     payload = {"client_id": CODEX_CLIENT_ID}
-    headers = {"originator": ORIGINATOR, "User-Agent": USER_AGENT}
+    headers = {"originator": PROVIDER_ORIGINATOR, "User-Agent": PROVIDER_USER_AGENT}
 
     print("=== REQUEST ===")
     print(f"URL: {USERCODE_URL}")

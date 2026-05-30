@@ -15,8 +15,8 @@ from openai_auth.config import (
 from openai_auth.credentials import (
     SUPPORTED_PROVIDER,
     Credential,
-    _decode_jwt_expiry,
-    _decode_jwt_identity,
+    decode_jwt_expiry,
+    decode_jwt_identity,
 )
 from openai_auth.errors import (
     DeviceCodeNetworkError,
@@ -186,7 +186,9 @@ def _post_form(
     client: httpx.Client, url: str, payload: dict[str, str], request_timeout: float
 ) -> dict[str, Any]:
     try:
-        response = client.post(url, data=payload, headers=_PROVIDER_HEADERS, timeout=request_timeout)
+        response = client.post(
+            url, data=payload, headers=_PROVIDER_HEADERS, timeout=request_timeout
+        )
     except httpx.HTTPError as exc:
         raise DeviceCodeNetworkError("device code provider request failed") from exc
 
@@ -255,9 +257,7 @@ def _authorization_from_poll_response(response: httpx.Response) -> tuple[str, st
         return None
 
     if response.status_code != 200:
-        raise DeviceCodeNetworkError(
-            f"device code poll returned HTTP {response.status_code}"
-        )
+        raise DeviceCodeNetworkError(f"device code poll returned HTTP {response.status_code}")
 
     data = _parse_json_body(response)
     authorization_code = data.get("authorization_code")
@@ -283,7 +283,7 @@ def _credential_from_token_response(data: dict[str, Any], now_ms: int) -> Creden
 
     expires_at = _resolve_expires_at(expires_in, access_token, now_ms)
 
-    account_id, email = _decode_jwt_identity(access_token)
+    account_id, email = decode_jwt_identity(access_token)
 
     return Credential(
         provider=SUPPORTED_PROVIDER,
@@ -309,7 +309,7 @@ def _credential_from_refresh_response(
 
     expires_at = _resolve_expires_at(expires_in, access_token, now_ms)
 
-    new_account_id, new_email = _decode_jwt_identity(access_token)
+    new_account_id, new_email = decode_jwt_identity(access_token)
     account_id = _metadata_value(new_account_id, current.account_id)
     email = _metadata_value(new_email, current.email)
 
@@ -327,7 +327,7 @@ def _resolve_expires_at(expires_in: Any, access_token: str, now_ms: int) -> int:
     if not isinstance(expires_in, bool) and isinstance(expires_in, int) and expires_in > 0:
         return now_ms + expires_in * 1000
 
-    jwt_expiry = _decode_jwt_expiry(access_token)
+    jwt_expiry = decode_jwt_expiry(access_token)
     if jwt_expiry is not None:
         return jwt_expiry
 

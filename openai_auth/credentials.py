@@ -137,12 +137,12 @@ def credential_from_mapping(data: Any) -> Credential:
         access_token=access_token,
         refresh_token=refresh_token,
         expires_at=expires_at,
-        account_id=account_id,
-        email=email,
+        account_id=account_id if isinstance(account_id, str) and account_id else None,
+        email=email if isinstance(email, str) and email else None,
     )
 
 
-def _decode_jwt_payload(access_token: str) -> dict | None:
+def decode_jwt_payload(access_token: str) -> dict | None:
     parts = access_token.split(".")
     if len(parts) != 3:
         return None
@@ -150,12 +150,12 @@ def _decode_jwt_payload(access_token: str) -> dict | None:
         decoded = base64.urlsafe_b64decode(parts[1] + "==").decode("utf-8")
         parsed = json.loads(decoded)
         return parsed if isinstance(parsed, dict) else None
-    except Exception:
+    except (ValueError, UnicodeDecodeError):
         return None
 
 
-def _decode_jwt_identity(access_token: str) -> tuple[str | None, str | None]:
-    payload = _decode_jwt_payload(access_token)
+def decode_jwt_identity(access_token: str) -> tuple[str | None, str | None]:
+    payload = decode_jwt_payload(access_token)
     if payload is None:
         return None, None
 
@@ -176,8 +176,8 @@ def _decode_jwt_identity(access_token: str) -> tuple[str | None, str | None]:
     return account_id, email
 
 
-def _decode_jwt_expiry(access_token: str) -> int | None:
-    payload = _decode_jwt_payload(access_token)
+def decode_jwt_expiry(access_token: str) -> int | None:
+    payload = decode_jwt_payload(access_token)
     if payload is None:
         return None
 
@@ -193,17 +193,33 @@ def _decode_jwt_expiry(access_token: str) -> int | None:
 
 
 def redact_secrets(message: str, credential: Credential | None = None) -> str:
-    redacted = message
     if credential is None:
-        return redacted
+        return message
 
-    secrets = sorted(
-        {credential.access_token, credential.refresh_token},
-        key=len,
-        reverse=True,
-    )
+    secrets = [s for s in {credential.access_token, credential.refresh_token} if s]
+    if not secrets:
+        return message
+
+    covered = [False] * len(message)
     for secret in secrets:
-        if secret:
-            redacted = redacted.replace(secret, "[REDACTED]")
+        start = 0
+        while True:
+            pos = message.find(secret, start)
+            if pos == -1:
+                break
+            for i in range(pos, pos + len(secret)):
+                covered[i] = True
+            start = pos + 1
 
-    return redacted
+    result = []
+    i = 0
+    while i < len(message):
+        if covered[i]:
+            result.append("[REDACTED]")
+            while i < len(message) and covered[i]:
+                i += 1
+        else:
+            result.append(message[i])
+            i += 1
+
+    return "".join(result)

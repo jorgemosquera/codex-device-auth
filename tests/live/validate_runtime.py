@@ -4,10 +4,9 @@ import httpx
 
 from openai_auth.config import credential_path
 from openai_auth.credentials import load_credentials, redact_secrets
+from openai_auth.runtime import build_auth_headers
 
 RUNTIME_TEST_URL = "https://chatgpt.com/backend-api/accounts/check"
-ORIGINATOR = "openclaw"
-USER_AGENT = "openclaw"
 
 
 def main() -> int:
@@ -16,14 +15,7 @@ def main() -> int:
         print("not logged in — run 'uv run python -m openai_auth login' first", file=sys.stderr)
         return 1
 
-    headers: dict[str, str] = {
-        "Authorization": f"Bearer {credential.access_token}",
-        "originator": ORIGINATOR,
-        "User-Agent": USER_AGENT,
-    }
-    if credential.account_id is not None:
-        headers["chatgpt-account-id"] = credential.account_id
-
+    headers = build_auth_headers(credential)
     safe_headers = {k: ("[REDACTED]" if k == "Authorization" else v) for k, v in headers.items()}
 
     print("=== REQUEST ===")

@@ -6,11 +6,14 @@ import sys
 
 import httpx
 
-CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
+from openai_auth.config import (
+    CODEX_CLIENT_ID,
+    DEVICE_CALLBACK_URL,
+    PROVIDER_ORIGINATOR,
+    PROVIDER_USER_AGENT,
+)
+
 TOKEN_URL = "https://auth.openai.com/oauth/token"
-DEVICE_CALLBACK_URL = "https://auth.openai.com/deviceauth/callback"
-ORIGINATOR = "openclaw"
-USER_AGENT = "openclaw"
 
 
 def _redact(text: str) -> str:
@@ -52,7 +55,7 @@ def main() -> int:
         "client_id": CODEX_CLIENT_ID,
         "code_verifier": code_verifier,
     }
-    headers = {"originator": ORIGINATOR, "User-Agent": USER_AGENT}
+    headers = {"originator": PROVIDER_ORIGINATOR, "User-Agent": PROVIDER_USER_AGENT}
 
     print("=== REQUEST ===")
     print(f"URL: {TOKEN_URL}")
