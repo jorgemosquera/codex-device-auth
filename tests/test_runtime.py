@@ -73,7 +73,9 @@ def test_build_auth_headers_include_bearer_and_account_id() -> None:
     headers = build_auth_headers(credential)
 
     assert_bearer_matches(headers["Authorization"], credential.access_token)
-    assert headers["OpenAI-Account"] == "account-123"
+    assert headers["chatgpt-account-id"] == "account-123"
+    assert headers["originator"] == "openclaw"
+    assert headers["User-Agent"] == "openclaw"
 
 
 def test_header_failure_output_does_not_expose_token_values() -> None:
@@ -131,6 +133,7 @@ def test_run_test_request_refreshes_expired_credentials_before_request(tmp_path:
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/oauth/token":
+            assert "application/x-www-form-urlencoded" in request.headers.get("content-type", "")
             return httpx.Response(
                 200,
                 json={

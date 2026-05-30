@@ -12,6 +12,7 @@ from openai_auth.credentials import (
     redact_secrets,
     save_credentials,
 )
+from openai_auth.config import PROVIDER_ORIGINATOR, PROVIDER_USER_AGENT
 from openai_auth.device_code import DEFAULT_REQUEST_TIMEOUT_SECONDS, refresh_credential
 from openai_auth.errors import CredentialError, RefreshTokenError, RuntimeRequestError
 
@@ -55,9 +56,13 @@ def _credential_state(credential: Credential, now_ms: int) -> str:
 
 
 def build_auth_headers(credential: Credential) -> dict[str, str]:
-    headers = {"Authorization": f"Bearer {credential.access_token}"}
+    headers = {
+        "Authorization": f"Bearer {credential.access_token}",
+        "originator": PROVIDER_ORIGINATOR,
+        "User-Agent": PROVIDER_USER_AGENT,
+    }
     if credential.account_id is not None:
-        headers["OpenAI-Account"] = credential.account_id
+        headers["chatgpt-account-id"] = credential.account_id
 
     return headers
 
